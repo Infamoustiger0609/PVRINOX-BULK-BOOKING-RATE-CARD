@@ -443,7 +443,7 @@ export default function App() {
           color: var(--ink);
         }
         .pb-title span { color: var(--red); }
-        .pb-subtitle { color: var(--ink-muted); font-size: 15px; margin: 0; max-width: 560px; }
+        .pb-subtitle { color: var(--ink-muted); font-size: 15px; line-height: 1.55; margin: 0; max-width: 560px; }
 
         .pb-top-bar {
           display: flex;
@@ -527,7 +527,7 @@ export default function App() {
           align-items: start;
         }
         .pb-grid-left { grid-column: 1; }
-        @media (max-width: 760px) {
+        @media (max-width: 860px) {
           .pb-grid { grid-template-columns: 1fr; }
           .pb-grid-left { grid-column: 1; }
         }
@@ -943,25 +943,39 @@ export default function App() {
           border-radius: 14px;
         }
 
-        @media (max-width: 760px) {
+        @media (max-width: 860px) {
           .pb-stub-wrap { position: static; top: auto; }
         }
 
         @media (max-width: 480px) {
-          .pb-page { padding: 20px 12px 40px; }
+          .pb-page { padding: 18px 14px 40px; }
           .pb-card { padding: 16px; }
-          .pb-title { font-size: clamp(30px, 9vw, 40px); }
+
+          .pb-top-bar { justify-content: center; margin-bottom: 14px; }
+          .pb-lookup-trigger { width: auto; padding: 8px 14px; font-size: 12px; min-height: 40px; }
+
+          .pb-title { font-size: clamp(26px, 8vw, 34px); letter-spacing: 0.01em; }
+          .pb-subtitle { font-size: 13.5px; max-width: 100%; }
+
+          .pb-input, .pb-select { font-size: 16px; padding: 12px 13px; }
+          .pb-combobox input.pb-input { padding-right: 34px; }
+          .pb-cinema-card-name, .pb-stub-row-value { overflow-wrap: break-word; word-break: break-word; }
+
           .pb-btn, .pb-stepper button, .pb-btn-reset, .pb-select-trigger {
             min-height: 44px;
           }
+          .pb-stepper button { width: 44px; }
           .pb-pill {
             min-height: 40px;
             padding: 10px 14px;
           }
           .pb-combo { min-height: 44px; }
           .pb-suggestion { min-height: 44px; display: flex; align-items: center; }
-          .pb-chip-remove, .pb-cinema-remove { min-height: 32px; }
+          .pb-chip { padding: 7px 8px 7px 14px; font-size: 13px; }
+          .pb-chip-remove { min-height: 36px; min-width: 28px; font-size: 15px; }
+          .pb-cinema-remove { min-height: 36px; }
           .pb-two-col { grid-template-columns: 1fr; }
+          .pb-stub-admit { font-size: 26px; }
           .pb-stub-top, .pb-stub-rows, .pb-stub-total, .pb-actions, .pb-barcode,
           .pb-contact-note, .pb-error, .pb-tentative-note {
             padding-left: 16px;
@@ -970,7 +984,6 @@ export default function App() {
           .pb-actions { flex-direction: column; }
           .pb-modal { padding: 16px; max-height: 90vh; }
           .pb-modal-backdrop { padding: 12px; }
-          .pb-lookup-trigger { width: 100%; text-align: center; }
         }
       `}</style>
 
@@ -1000,11 +1013,7 @@ export default function App() {
                   <input
                     type="text"
                     className="pb-input"
-                    placeholder={
-                      selectedCities.length === 0
-                        ? 'Search or select cities...'
-                        : selectedCities.length + ' selected — type to add more'
-                    }
+                    placeholder={selectedCities.length === 0 ? 'Search cities...' : selectedCities.length + ' selected'}
                     value={cityQuery}
                     onChange={(e) => {
                       setCityQuery(e.target.value);
@@ -1087,9 +1096,7 @@ export default function App() {
                     type="text"
                     className="pb-input"
                     placeholder={
-                      selectedCinemaNames.length === 0
-                        ? 'Search or select cinemas...'
-                        : selectedCinemaNames.length + ' selected — type to add more'
+                      selectedCinemaNames.length === 0 ? 'Search cinemas...' : selectedCinemaNames.length + ' selected'
                     }
                     value={cinemaQuery}
                     onChange={(e) => {

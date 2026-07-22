@@ -1260,7 +1260,7 @@ export default function App() {
             {selectedCinemaNames.length > 0 && status === 'form' && (
               <div className="pb-stub">
                 <div className="pb-stub-top">
-                  <div className="pb-stub-eyebrow">PVR INOX &middot; Group Quote</div>
+                  
                   <div className="pb-stub-admit">ADMIT {totalTicketCount}</div>
                   <div className="pb-stub-sub">
                     {computedCinemas.length} cinema{computedCinemas.length > 1 ? 's' : ''} selected

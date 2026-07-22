@@ -957,7 +957,7 @@ export default function App() {
         <div className="pb-grid">
           <div className="pb-grid-left">
             <div className="pb-header">
-              <p className="pb-eyebrow">Bulk Booking</p>
+              <p className="pb-eyebrow"></p>
               <h1 className="pb-title">Get your <span>quote</span> in seconds</h1>
               <p className="pb-subtitle">
                 Pick a cinema, tell us about your group, and we will show you an instant estimate.
@@ -1086,7 +1086,7 @@ export default function App() {
                               {r.timeSlotId ? (
                                 <span className="pb-pill-price">{formatINR(f[r.timeSlotId])}/ticket</span>
                               ) : (
-                                <span className="pb-pill-price pb-pill-price-muted">price varies by time slot</span>
+                                <span className="pb-pill-price pb-pill-price-muted"></span>
                               )}
                             </div>
                           ))}
@@ -1313,7 +1313,7 @@ export default function App() {
                             <span className="pb-stub-row-label">Subtotal</span>
                             <span className="pb-stub-row-value">{formatINR(r.lineTotal)}</span>
                           </div>
-                          <div className="pb-tentative-note small">Prices are tentative. Final ticket prices may vary.</div>
+                          <div className="pb-tentative-note small"> Prices are tentative and may vary based on the final ticket price.</div>
                         </>
                       )}
                     </div>
@@ -1325,7 +1325,7 @@ export default function App() {
                   </span>
                   <span className="pb-stub-total-value">{formatINR(grandTotal)}</span>
                 </div>
-                <div className="pb-tentative-note">Prices are tentative. Final ticket prices may vary.</div>
+                <div className="pb-tentative-note">Prices are tentative and may vary based on the final ticket price.</div>
                 <div className="pb-barcode">
                   {Array.from({ length: 36 }).map((_, i) => (
                     <span key={i} style={{ width: (i % 5 === 0 ? 3 : 1.5) + 'px' }} />

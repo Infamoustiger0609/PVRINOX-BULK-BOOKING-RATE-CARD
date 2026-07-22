@@ -105,9 +105,11 @@ export default function App() {
 
   const [showCityDropdown, setShowCityDropdown] = useState(false);
   const [selectedCities, setSelectedCities] = useState([]);
+  const [cityQuery, setCityQuery] = useState('');
 
   const [showCinemaDropdown, setShowCinemaDropdown] = useState(false);
   const [selectedCinemaNames, setSelectedCinemaNames] = useState([]);
+  const [cinemaQuery, setCinemaQuery] = useState('');
   const [cinemaDetails, setCinemaDetails] = useState({}); // { [cinemaName]: { format, timeSlotId, ticketCountInput, requestDate, movieName, foodComboId, foodDropdownOpen, timeSlotDropdownOpen } }
   const cinemaFieldRef = useRef(null);
 
@@ -129,6 +131,20 @@ export default function App() {
     const pool = selectedCities.length === 0 ? CINEMA_NAMES : CINEMA_NAMES.filter((c) => selectedCities.includes(getCityForCinema(c)));
     return pool.slice().sort((a, b) => a.localeCompare(b));
   }, [selectedCities]);
+
+  const cityQueryTrimmed = cityQuery.trim().toLowerCase();
+  const showAllCitiesOption = cityQueryTrimmed === '';
+  const showDelhiNcrOption = cityQueryTrimmed === '' || 'delhi ncr'.includes(cityQueryTrimmed);
+  const filteredCityOptions = useMemo(() => {
+    if (!cityQueryTrimmed) return ALL_CITIES;
+    return ALL_CITIES.filter((c) => c.toLowerCase().includes(cityQueryTrimmed));
+  }, [cityQueryTrimmed]);
+
+  const cinemaQueryTrimmed = cinemaQuery.trim().toLowerCase();
+  const filteredCinemaOptions = useMemo(() => {
+    if (!cinemaQueryTrimmed) return cityFilteredCinemaNames;
+    return cityFilteredCinemaNames.filter((c) => c.toLowerCase().includes(cinemaQueryTrimmed));
+  }, [cityFilteredCinemaNames, cinemaQueryTrimmed]);
 
   const computedCinemas = selectedCinemaNames.map((cinemaName) => {
     const detail = cinemaDetails[cinemaName] || {
@@ -169,7 +185,6 @@ export default function App() {
   );
   const quoteReady = Boolean(selectedCinemaNames.length > 0 && completeCinemas.length === selectedCinemaNames.length);
   const grandTotal = computedCinemas.reduce((sum, r) => sum + r.lineTotal, 0);
-  const totalTicketCount = computedCinemas.reduce((sum, r) => sum + r.ticketCount, 0);
 
   function toggleCity(city) {
     setSelectedCities((cities) => (cities.includes(city) ? cities.filter((c) => c !== city) : [...cities, city]));
@@ -549,7 +564,6 @@ export default function App() {
         .pb-input:focus, .pb-select:focus { border-color: var(--gold); }
         .pb-input::placeholder { color: #6f645f; }
 
-        input[type="date"].pb-input { color-scheme: dark; }
         input[type="date"].pb-input::-webkit-calendar-picker-indicator {
           filter: invert(1) brightness(1.6);
           cursor: pointer;
@@ -586,6 +600,18 @@ export default function App() {
         .pb-city-option input[type="checkbox"] { pointer-events: none; }
         .pb-city-divider { height: 1px; background: var(--line); margin: 2px 0; }
         .pb-ncr-hint { font-size: 10.5px; color: var(--ink-muted); }
+
+        .pb-combobox { position: relative; }
+        .pb-combobox input.pb-input { padding-right: 32px; cursor: text; }
+        .pb-combobox-caret {
+          position: absolute;
+          right: 13px;
+          top: 50%;
+          transform: translateY(-50%);
+          color: var(--ink-muted);
+          font-size: 11px;
+          pointer-events: none;
+        }
 
         .pb-select-trigger {
           display: flex;
@@ -788,6 +814,7 @@ export default function App() {
           letter-spacing: 0.03em;
           line-height: 1.05;
         }
+        .pb-stub-estimate { text-align: center; color: var(--red-dim); }
         .pb-stub-sub { font-size: 12.5px; color: #4a4340; margin-top: 2px; }
 
         .pb-stub-divider {
@@ -969,15 +996,30 @@ export default function App() {
             <div className="pb-card">
                 <div className="pb-field">
                   <label className="pb-label">City</label>
-                <button
-                  type="button"
-                  className="pb-input pb-select-trigger"
-                  onClick={() => setShowCityDropdown((v) => !v)}
-                  onBlur={() => setTimeout(() => setShowCityDropdown(false), 120)}
-                >
-                  <span>{selectedCities.length === 0 ? 'All cities' : selectedCities.length + ' selected'}</span>
-                  <span className="pb-select-caret">&#9662;</span>
-                </button>
+                <div className="pb-combobox">
+                  <input
+                    type="text"
+                    className="pb-input"
+                    placeholder={
+                      selectedCities.length === 0
+                        ? 'Search or select cities...'
+                        : selectedCities.length + ' selected — type to add more'
+                    }
+                    value={cityQuery}
+                    onChange={(e) => {
+                      setCityQuery(e.target.value);
+                      setShowCityDropdown(true);
+                    }}
+                    onFocus={() => setShowCityDropdown(true)}
+                    onBlur={() =>
+                      setTimeout(() => {
+                        setShowCityDropdown(false);
+                        setCityQuery('');
+                      }, 120)
+                    }
+                  />
+                  <span className="pb-combobox-caret">&#9662;</span>
+                </div>
                 {selectedCities.length > 0 && (
                   <div className="pb-chip-row">
                     {selectedCities.map((city) => (
@@ -1000,21 +1042,27 @@ export default function App() {
                 )}
                 {showCityDropdown && (
                   <div className="pb-suggestions pb-city-dropdown">
-                    <div
-                      className={'pb-suggestion pb-city-option' + (selectedCities.length === 0 ? ' active' : '')}
-                      onMouseDown={() => setSelectedCities([])}
-                    >
-                      All cities
-                    </div>
-                    <div
-                      className={'pb-suggestion pb-city-option' + (isNcrSelected ? ' active' : '')}
-                      onMouseDown={toggleDelhiNCR}
-                    >
-                      <input type="checkbox" readOnly checked={isNcrSelected} />
-                      Delhi NCR <span className="pb-ncr-hint">({NCR_CITIES.join(', ')})</span>
-                    </div>
-                    <div className="pb-city-divider" />
-                    {ALL_CITIES.map((city) => (
+                    {showAllCitiesOption && (
+                      <div
+                        className={'pb-suggestion pb-city-option' + (selectedCities.length === 0 ? ' active' : '')}
+                        onMouseDown={() => setSelectedCities([])}
+                      >
+                        All cities
+                      </div>
+                    )}
+                    {showDelhiNcrOption && (
+                      <div
+                        className={'pb-suggestion pb-city-option' + (isNcrSelected ? ' active' : '')}
+                        onMouseDown={toggleDelhiNCR}
+                      >
+                        <input type="checkbox" readOnly checked={isNcrSelected} />
+                        Delhi NCR <span className="pb-ncr-hint">({NCR_CITIES.join(', ')})</span>
+                      </div>
+                    )}
+                    {(showAllCitiesOption || showDelhiNcrOption) && filteredCityOptions.length > 0 && (
+                      <div className="pb-city-divider" />
+                    )}
+                    {filteredCityOptions.map((city) => (
                       <div
                         key={city}
                         className={'pb-suggestion pb-city-option' + (selectedCities.includes(city) ? ' active' : '')}
@@ -1023,21 +1071,41 @@ export default function App() {
                         <input type="checkbox" readOnly checked={selectedCities.includes(city)} /> {city}
                       </div>
                     ))}
+                    {filteredCityOptions.length === 0 && !showDelhiNcrOption && (
+                      <div className="pb-suggestion" style={{ cursor: 'default' }}>
+                        No matching cities.
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-  
+
               <div className="pb-field" ref={cinemaFieldRef}>
                 <label className="pb-label">Cinemas</label>
-                <button
-                  type="button"
-                  className="pb-input pb-select-trigger"
-                  onClick={() => setShowCinemaDropdown((v) => !v)}
-                  onBlur={() => setTimeout(() => setShowCinemaDropdown(false), 120)}
-                >
-                  <span>{selectedCinemaNames.length === 0 ? 'Select cinemas...' : selectedCinemaNames.length + ' selected'}</span>
-                  <span className="pb-select-caret">&#9662;</span>
-                </button>
+                <div className="pb-combobox">
+                  <input
+                    type="text"
+                    className="pb-input"
+                    placeholder={
+                      selectedCinemaNames.length === 0
+                        ? 'Search or select cinemas...'
+                        : selectedCinemaNames.length + ' selected — type to add more'
+                    }
+                    value={cinemaQuery}
+                    onChange={(e) => {
+                      setCinemaQuery(e.target.value);
+                      setShowCinemaDropdown(true);
+                    }}
+                    onFocus={() => setShowCinemaDropdown(true)}
+                    onBlur={() =>
+                      setTimeout(() => {
+                        setShowCinemaDropdown(false);
+                        setCinemaQuery('');
+                      }, 120)
+                    }
+                  />
+                  <span className="pb-combobox-caret">&#9662;</span>
+                </div>
                 {showCinemaDropdown && (
                   <div className="pb-suggestions pb-city-dropdown">
                     {cityFilteredCinemaNames.length === 0 && (
@@ -1045,7 +1113,12 @@ export default function App() {
                         No cinemas in the selected cities.
                       </div>
                     )}
-                    {cityFilteredCinemaNames.map((c) => (
+                    {cityFilteredCinemaNames.length > 0 && filteredCinemaOptions.length === 0 && (
+                      <div className="pb-suggestion" style={{ cursor: 'default' }}>
+                        No matching cinemas.
+                      </div>
+                    )}
+                    {filteredCinemaOptions.map((c) => (
                       <div
                         key={c}
                         className={'pb-suggestion pb-city-option' + (selectedCinemaNames.includes(c) ? ' active' : '')}
@@ -1261,7 +1334,7 @@ export default function App() {
               <div className="pb-stub">
                 <div className="pb-stub-top">
                   
-                  <div className="pb-stub-admit">ADMIT {totalTicketCount}</div>
+                  <div className="pb-stub-admit pb-stub-estimate">ESTIMATE</div>
                   <div className="pb-stub-sub">
                     {computedCinemas.length} cinema{computedCinemas.length > 1 ? 's' : ''} selected
                   </div>

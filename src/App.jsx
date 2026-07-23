@@ -447,9 +447,23 @@ export default function App() {
 
         .pb-top-bar {
           display: flex;
-          justify-content: flex-end;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
           margin-bottom: 16px;
         }
+        .pb-brand-logo {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          font-family: 'Bebas Neue', sans-serif;
+          font-size: 24px;
+          letter-spacing: 0.02em;
+          line-height: 1;
+          flex-shrink: 0;
+        }
+        .pb-brand-pvr, .pb-brand-inox { color: var(--gold); }
+        .pb-brand-star { color: var(--ink); font-size: 13px; }
         .pb-lookup-trigger {
           background: transparent;
           border: 1px solid var(--line);
@@ -952,7 +966,9 @@ export default function App() {
           .pb-page { padding: 18px 14px 40px; }
           .pb-card { padding: 16px; }
 
-          .pb-top-bar { justify-content: center; margin-bottom: 14px; }
+          .pb-top-bar { justify-content: space-between; margin-bottom: 14px; }
+          .pb-brand-logo { font-size: 18px; gap: 5px; }
+          .pb-brand-star { font-size: 10px; }
           .pb-lookup-trigger { width: auto; padding: 8px 14px; font-size: 12px; min-height: 40px; }
 
           .pb-title { font-size: clamp(26px, 8vw, 34px); letter-spacing: 0.01em; }
@@ -990,6 +1006,11 @@ export default function App() {
 
       <div className="pb-shell">
         <div className="pb-top-bar">
+          <div className="pb-brand-logo" aria-label="PVR INOX">
+            <span className="pb-brand-pvr">PVR</span>
+            <span className="pb-brand-star">&#9733;</span>
+            <span className="pb-brand-inox">INOX</span>
+          </div>
           <button type="button" className="pb-lookup-trigger" onClick={openLookupModal}>
             Check a reference number
           </button>

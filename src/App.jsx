@@ -944,7 +944,7 @@ export default function App() {
         }
 
         @media (max-width: 860px) {
-          .pb-stub-wrap { position: static; top: auto; }
+          .pb-stub-wrap { grid-column: 1; position: static; top: auto; }
         }
 
         @media (max-width: 480px) {

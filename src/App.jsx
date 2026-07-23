@@ -549,6 +549,7 @@ export default function App() {
           color: var(--ink-muted);
           margin-bottom: 8px;
         }
+        .pb-required { color: var(--red); margin-left: 2px; }
         .pb-input, .pb-select {
           width: 100%;
           background: var(--surface-2);
@@ -1268,12 +1269,15 @@ export default function App() {
                           </div>
 
                           <div className="pb-field" style={{ marginBottom: 0 }}>
-                            <label className="pb-label">Movie name</label>
+                            <label className="pb-label">
+                              Movie name<span className="pb-required">*</span>
+                            </label>
                             <input
                               className="pb-input"
                               placeholder="Which movie is this for?"
                               value={r.movieName}
                               onChange={(e) => updateCinemaDetail(r.cinemaName, { movieName: e.target.value })}
+                              required
                             />
                           </div>
                         </div>

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { jsPDF } from 'jspdf';
 
 /* ---------------------------------------------------------------
    PVR INOX — Group Booking Quote Tool
@@ -35,18 +36,30 @@ const CITY_OVERRIDES = {
   'PVR City Mall Yamuna Nagar': 'Yamuna Nagar',
 };
 
+// Some source data spells the same city more than one way — normalize at the point
+// city lists are derived (not by editing the underlying data) so cinemas from either
+// spelling surface under a single merged option.
+const CITY_NAME_ALIASES = { Gurugram: 'Gurgaon', Ahemdabad: 'Ahmedabad' };
+function normalizeCityName(city) {
+  return CITY_NAME_ALIASES[city] || city;
+}
+
 function getCityForCinema(name) {
-  if (CITY_OVERRIDES[name]) return CITY_OVERRIDES[name];
-  if (name.includes('Pitampura')) return 'Delhi';
+  if (CITY_OVERRIDES[name]) return normalizeCityName(CITY_OVERRIDES[name]);
+  if (name.includes('Pitampura')) return normalizeCityName('Delhi');
   const words = name.trim().split(/\s+/);
-  return words[words.length - 1];
+  return normalizeCityName(words[words.length - 1]);
 }
 
 // "Delhi NCR" quick-select in the city dropdown expands to this set — edit here to change it
-const NCR_CITIES = ['Delhi', 'New Delhi', 'Gurugram', 'Gurgaon', 'Noida', 'Greater Noida', 'Faridabad', 'Ghaziabad'];
+const NCR_CITIES = ['Delhi', 'New Delhi', 'Gurgaon', 'Noida', 'Greater Noida', 'Faridabad', 'Ghaziabad'];
 
 function toTitleCase(str) {
   return str.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function getCityForPSCinema(dataset, name) {
+  return normalizeCityName(toTitleCase(dataset[name]?.city || ''));
 }
 
 // Shared by bulk booking (CINEMA_DATA, city derived from the cinema name) and private
@@ -65,6 +78,46 @@ const TIME_SLOTS = [
 ];
 
 const MIN_TICKET_COUNT = 50;
+
+// Date-based price adjustments, checked against a cinema entry's request date.
+// 'blocked' dates can't be booked at all (e.g. a holiday with no discounts available);
+// 'surge' dates apply their own multiplier to the ticket price. Add real dates here as
+// they're identified — this list is empty by default.
+const DATE_PRICE_RULES = [
+  // { date: '2026-08-15', type: 'blocked', label: 'Independence Day — no bulk booking discounts available' },
+  // { date: '2026-10-20', type: 'surge', multiplier: 1.15, label: 'Festive release weekend' },
+];
+
+// Set to e.g. 1.1 in future to activate a 10% weekend surcharge on Saturdays/Sundays.
+// Left at 1.0 for now — the logic below is fully wired up but has no visible effect
+// until this changes.
+const WEEKEND_SURGE_MULTIPLIER = 1.0;
+
+// Shared by both flows' pricing calculations. Returns null when a date has no
+// adjustment, { blocked: true, label } when the date can't be booked at all, or
+// { blocked: false, multiplier, label } when a surge/weekend multiplier applies.
+// A specific DATE_PRICE_RULES entry always takes priority over the weekend surge.
+function getDatePriceAdjustment(dateStr) {
+  if (!dateStr) return null;
+  const rule = DATE_PRICE_RULES.find((r) => r.date === dateStr);
+  if (rule) {
+    if (rule.type === 'blocked') return { blocked: true, label: rule.label };
+    if (rule.type === 'surge') return { blocked: false, multiplier: rule.multiplier, label: rule.label };
+  }
+  if (WEEKEND_SURGE_MULTIPLIER !== 1.0) {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dayOfWeek = new Date(y, m - 1, d).getDay(); // local time — avoids UTC date-shift off-by-one
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      return { blocked: false, multiplier: WEEKEND_SURGE_MULTIPLIER, label: 'Weekend pricing applied' };
+    }
+  }
+  return null;
+}
+
+function formatSurgeNote(adjustment) {
+  const pct = Math.round((adjustment.multiplier - 1) * 100);
+  return `${adjustment.label} (${pct >= 0 ? '+' : ''}${pct}%)`;
+}
 
 const FOOD_COMBOS = [
   { id: 'none', label: 'No food', items: 'Tickets only', price: 0 },
@@ -88,6 +141,12 @@ function generateReferenceId() {
 
 function formatINR(n) {
   return '₹' + Math.round(n).toLocaleString('en-IN');
+}
+
+// jsPDF's built-in fonts (Helvetica/Times/Courier) don't have the ₹ glyph — it
+// renders as a garbled superscript character. Used only inside the PDF quote.
+function formatINRForPdf(n) {
+  return 'Rs. ' + Math.round(n).toLocaleString('en-IN');
 }
 
 // Accepts a plain "yyyy-MM-dd" string or a full ISO timestamp and always
@@ -115,6 +174,91 @@ function formatSubmittedOn(value) {
   return `Submitted on ${day} ${month} ${year}, ${hours}:${minutes} ${ampm}`;
 }
 
+// Shared by both flows' "Download PDF" button. Takes already-computed display
+// strings/numbers (built separately by each flow from its own live-stub state) and
+// just lays them out — no pricing math happens in here.
+function buildQuotePdf({ bookingType, referenceId, cinemaSections, grandTotal }) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const marginX = 18;
+  const valueX = 55;
+  let y = 22;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(22);
+  doc.setTextColor(20, 20, 20);
+  doc.text('PVR', marginX, y);
+  const pvrWidth = doc.getTextWidth('PVR ');
+  doc.setTextColor(190, 145, 40);
+  doc.text('•', marginX + pvrWidth, y);
+  doc.setTextColor(20, 20, 20);
+  doc.text('INOX', marginX + pvrWidth + 6, y);
+
+  y += 10;
+  doc.setFontSize(16);
+  doc.setFont('helvetica', 'bold');
+  doc.text(bookingType === 'Private Screening' ? 'Private Screening Quote' : 'Bulk Booking Quote', marginX, y);
+
+  y += 7;
+  doc.setFontSize(10.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(90, 90, 90);
+  const todayStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  doc.text(`Reference: ${referenceId}    Date: ${todayStr}`, marginX, y);
+
+  y += 6;
+  doc.setDrawColor(200, 200, 200);
+  doc.line(marginX, y, pageWidth - marginX, y);
+  y += 9;
+
+  cinemaSections.forEach((section, idx) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12.5);
+    doc.setTextColor(20, 20, 20);
+    doc.text(`${idx + 1}. ${section.heading}`, marginX, y);
+    y += 6.5;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10.5);
+    doc.setTextColor(60, 60, 60);
+    section.rows.forEach(([label, value]) => {
+      doc.text(`${label}:`, marginX + 4, y);
+      doc.text(String(value), valueX, y);
+      y += 5.5;
+    });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(20, 20, 20);
+    doc.text('Subtotal:', marginX + 4, y);
+    doc.text(formatINRForPdf(section.subtotal), valueX, y);
+    y += 9;
+  });
+
+  doc.setDrawColor(200, 200, 200);
+  doc.line(marginX, y, pageWidth - marginX, y);
+  y += 10;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(15);
+  doc.setTextColor(150, 20, 25);
+  doc.text('Estimated Total:', marginX, y);
+  doc.text(formatINRForPdf(grandTotal), marginX + 62, y);
+  y += 8;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(150, 20, 25);
+  doc.text('Prices are tentative and subject to change at confirmation.', marginX, y);
+
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(9);
+  doc.setTextColor(120, 120, 120);
+  doc.text('This is not a confirmed booking. Our team will contact you to finalize details.', marginX, pageHeight - 15);
+
+  doc.save(`${referenceId}-quote.pdf`);
+}
+
 export default function App() {
   const [mode, setMode] = useState(null); // null | 'bulkBooking' | 'privateScreening'
 
@@ -127,7 +271,7 @@ export default function App() {
   const [showCinemaDropdown, setShowCinemaDropdown] = useState(false);
   const [selectedCinemaNames, setSelectedCinemaNames] = useState([]);
   const [cinemaQuery, setCinemaQuery] = useState('');
-  const [cinemaDetails, setCinemaDetails] = useState({}); // { [cinemaName]: { format, timeSlotId, ticketCountInput, requestDate, movieName, foodComboId, foodDropdownOpen, timeSlotDropdownOpen } }
+  const [cinemaDetails, setCinemaDetails] = useState({}); // { [cinemaName]: { format, timeSlotId, ticketCountInput, requestDate, foodComboId, foodDropdownOpen, timeSlotDropdownOpen } }
   const cinemaFieldRef = useRef(null);
 
   const [name, setName] = useState('');
@@ -183,7 +327,7 @@ export default function App() {
 
   const { cinemaNames: PS_CINEMA_NAMES, allCities: PS_ALL_CITIES } = useMemo(() => {
     if (!privateScreeningData) return { cinemaNames: [], allCities: [] };
-    return buildCinemaAndCityLists(privateScreeningData, (name) => toTitleCase(privateScreeningData[name]?.city || ''));
+    return buildCinemaAndCityLists(privateScreeningData, (name) => getCityForPSCinema(privateScreeningData, name));
   }, [privateScreeningData]);
 
   const psNcrCities = useMemo(() => NCR_CITIES.filter((c) => PS_ALL_CITIES.includes(c)), [PS_ALL_CITIES]);
@@ -193,9 +337,25 @@ export default function App() {
     const pool =
       psSelectedCities.length === 0
         ? PS_CINEMA_NAMES
-        : PS_CINEMA_NAMES.filter((c) => psSelectedCities.includes(toTitleCase(privateScreeningData?.[c]?.city || '')));
+        : PS_CINEMA_NAMES.filter((c) => psSelectedCities.includes(getCityForPSCinema(privateScreeningData || {}, c)));
     return pool.slice().sort((a, b) => a.localeCompare(b));
   }, [PS_CINEMA_NAMES, psSelectedCities, privateScreeningData]);
+
+  // Same pruning as bulk booking's cityFilteredCinemaNames effect above, for the
+  // private screening flow's own selection state. Still guarded on privateScreeningData
+  // being loaded (getCityForPSCinema needs it), but not on psSelectedCities being
+  // non-empty — clearing every city should clear every selected cinema too.
+  useEffect(() => {
+    if (!privateScreeningData) return;
+    setPSSelectedCinemaNames((names) => names.filter((n) => psSelectedCities.includes(getCityForPSCinema(privateScreeningData, n))));
+    setPSCinemaDetails((details) => {
+      const next = {};
+      Object.keys(details).forEach((n) => {
+        if (psSelectedCities.includes(getCityForPSCinema(privateScreeningData, n))) next[n] = details[n];
+      });
+      return next;
+    });
+  }, [psSelectedCities, privateScreeningData]);
 
   const psCityQueryTrimmed = psCityQuery.trim().toLowerCase();
   const showAllPSCitiesOption = psCityQueryTrimmed === '';
@@ -218,6 +378,24 @@ export default function App() {
     return pool.slice().sort((a, b) => a.localeCompare(b));
   }, [selectedCities]);
 
+  // Dropping a city (chip remove, "Clear all", NCR toggle-off) should immediately drop
+  // any already-selected cinemas that no longer belong to a selected city — not just
+  // leave them orphaned until manually removed. "Clear all" empties selectedCities
+  // entirely, which correctly clears every selected cinema too (nothing is "in" an
+  // empty list) — this only ever runs once a cinema has actually been selected, so
+  // there's no interaction with the separate "no city filter shows every cinema in
+  // the picker" browsing behavior.
+  useEffect(() => {
+    setSelectedCinemaNames((names) => names.filter((n) => selectedCities.includes(getCityForCinema(n))));
+    setCinemaDetails((details) => {
+      const next = {};
+      Object.keys(details).forEach((n) => {
+        if (selectedCities.includes(getCityForCinema(n))) next[n] = details[n];
+      });
+      return next;
+    });
+  }, [selectedCities]);
+
   const cityQueryTrimmed = cityQuery.trim().toLowerCase();
   const showAllCitiesOption = cityQueryTrimmed === '';
   const showDelhiNcrOption = cityQueryTrimmed === '' || 'delhi ncr'.includes(cityQueryTrimmed);
@@ -238,7 +416,6 @@ export default function App() {
       timeSlotId: null,
       ticketCountInput: String(MIN_TICKET_COUNT),
       requestDate: '',
-      movieName: '',
       foodComboId: 'none',
       foodDropdownOpen: false,
       timeSlotDropdownOpen: false,
@@ -246,7 +423,10 @@ export default function App() {
     const availableFormats = CINEMA_DATA[cinemaName] || [];
     const activeFormat = availableFormats.find((f) => f.format === detail.format);
     const activeTimeSlot = TIME_SLOTS.find((t) => t.id === detail.timeSlotId) || null;
-    const activePrice = activeFormat && detail.timeSlotId ? activeFormat[detail.timeSlotId] : null;
+    const basePrice = activeFormat && detail.timeSlotId ? activeFormat[detail.timeSlotId] : null;
+    const dateAdjustment = getDatePriceAdjustment(detail.requestDate);
+    const priceMultiplier = dateAdjustment && !dateAdjustment.blocked && dateAdjustment.multiplier ? dateAdjustment.multiplier : 1;
+    const activePrice = basePrice != null ? basePrice * priceMultiplier : null;
     const activeCombo = FOOD_COMBOS.find((c) => c.id === detail.foodComboId);
     const ticketCount = Math.max(0, parseInt(detail.ticketCountInput, 10) || 0);
     const ticketTotal = activePrice ? activePrice * ticketCount : 0;
@@ -257,7 +437,10 @@ export default function App() {
       availableFormats,
       activeFormat,
       activeTimeSlot,
+      basePrice,
       activePrice,
+      dateAdjustment,
+      priceMultiplier,
       activeCombo,
       ticketCount,
       ticketTotal,
@@ -267,7 +450,12 @@ export default function App() {
   });
 
   const completeCinemas = computedCinemas.filter(
-    (r) => r.activeFormat && r.timeSlotId && r.ticketCount >= MIN_TICKET_COUNT && r.requestDate && r.movieName.trim()
+    (r) =>
+      r.activeFormat &&
+      r.timeSlotId &&
+      r.ticketCount >= MIN_TICKET_COUNT &&
+      r.requestDate &&
+      !(r.dateAdjustment && r.dateAdjustment.blocked)
   );
   const quoteReady = Boolean(selectedCinemaNames.length > 0 && completeCinemas.length === selectedCinemaNames.length);
   const grandTotal = computedCinemas.reduce((sum, r) => sum + r.lineTotal, 0);
@@ -288,10 +476,13 @@ export default function App() {
     const activeTimeSlot = TIME_SLOTS.find((t) => t.id === detail.timeSlotId) || null;
     const activeCombo = FOOD_COMBOS.find((c) => c.id === detail.foodComboId);
     const desiredAttendees = Math.max(0, parseInt(detail.desiredAttendeesInput, 10) || 0);
+    const dateAdjustment = getDatePriceAdjustment(detail.requestDate);
+    const priceMultiplier = dateAdjustment && !dateAdjustment.blocked && dateAdjustment.multiplier ? dateAdjustment.multiplier : 1;
 
     const rawAudiOptions = audis.map((a) => {
       const ninetyPercentFloor = Math.ceil(a.capacity * 0.9);
-      const rate = detail.timeSlotId ? a[detail.timeSlotId] : null;
+      const baseRate = detail.timeSlotId ? a[detail.timeSlotId] : null;
+      const rate = baseRate != null ? baseRate * priceMultiplier : null;
       const requiredTickets = desiredAttendees > 0 ? Math.max(desiredAttendees, ninetyPercentFloor) : null;
       const flooredByMinimum = desiredAttendees > 0 && desiredAttendees < ninetyPercentFloor;
       const disabled = desiredAttendees > 0 && a.capacity < desiredAttendees;
@@ -334,6 +525,8 @@ export default function App() {
       selectedAudi,
       activeTimeSlot,
       activeCombo,
+      dateAdjustment,
+      priceMultiplier,
       ticketSubtotal,
       foodSubtotal,
       lineTotal,
@@ -341,7 +534,13 @@ export default function App() {
   });
 
   const completePSCinemas = computedPSCinemas.filter(
-    (r) => r.timeSlotId && r.desiredAttendees > 0 && r.selectedAudi && r.requestDate && r.movieName.trim()
+    (r) =>
+      r.timeSlotId &&
+      r.desiredAttendees > 0 &&
+      r.selectedAudi &&
+      r.requestDate &&
+      r.movieName.trim() &&
+      !(r.dateAdjustment && r.dateAdjustment.blocked)
   );
   const psQuoteReady = Boolean(psSelectedCinemaNames.length > 0 && completePSCinemas.length === psSelectedCinemaNames.length);
   const psGrandTotal = computedPSCinemas.reduce((sum, r) => sum + r.lineTotal, 0);
@@ -453,6 +652,31 @@ export default function App() {
     resetPSFormFields();
   }
 
+  function downloadPSQuotePdf() {
+    const cinemaSections = completePSCinemas.map((r) => ({
+      heading: `${r.cinemaName} — ${getCityForPSCinema(privateScreeningData, r.cinemaName)}`,
+      rows: [
+        ['Audi', `Audi ${r.selectedAudi.audi} (${r.selectedAudi.format}, ${r.selectedAudi.capacity} seats)`],
+        ['Movie', r.movieName],
+        ['Time slot', `${r.activeTimeSlot.label} (${r.activeTimeSlot.range})`],
+        ['Request date', r.requestDate],
+        ['Attendees', String(r.desiredAttendees)],
+        ['Tickets required', `${r.selectedAudi.requiredTickets} × ${formatINRForPdf(r.selectedAudi.rate)}`],
+        ['Food', r.activeCombo ? r.activeCombo.label : 'None'],
+        ...(r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier
+          ? [['Price adjustment', formatSurgeNote(r.dateAdjustment)]]
+          : []),
+      ],
+      subtotal: r.lineTotal,
+    }));
+    buildQuotePdf({
+      bookingType: 'Private Screening',
+      referenceId: psReferenceId,
+      cinemaSections,
+      grandTotal: psGrandTotal,
+    });
+  }
+
   function handlePSReset() {
     setPSStatus('form');
     setPSConfirmedFirstName('');
@@ -481,7 +705,6 @@ export default function App() {
           timeSlotId: null,
           ticketCountInput: String(MIN_TICKET_COUNT),
           requestDate: '',
-          movieName: '',
           foodComboId: 'none',
           foodDropdownOpen: false,
           timeSlotDropdownOpen: false,
@@ -505,10 +728,12 @@ export default function App() {
         const prefix = completeCinemas.length > 1 ? idx + 1 + '. ' : '';
         return (
           prefix + r.cinemaName + ' (' + r.format + ')\n' +
-          '   Movie: ' + r.movieName + '\n' +
           '   Date: ' + r.requestDate + '\n' +
           '   Time slot: ' + r.activeTimeSlot.label + ' (' + r.activeTimeSlot.range + ')\n' +
           '   Tickets: ' + r.ticketCount + ' x ' + formatINR(r.activePrice) + ' = ' + formatINR(r.ticketTotal) + '\n' +
+          (r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier
+            ? '   Price adjustment: ' + formatSurgeNote(r.dateAdjustment) + '\n'
+            : '') +
           '   Food: ' + (r.activeCombo ? r.activeCombo.label : 'None') + ' = ' + (r.foodTotal ? formatINR(r.foodTotal) : 'None') + '\n' +
           '   Subtotal: ' + formatINR(r.lineTotal)
         );
@@ -561,9 +786,12 @@ export default function App() {
           pricePerTicket: r.activePrice,
           ticketCount: r.ticketCount,
           requestDate: r.requestDate,
-          movieName: r.movieName,
           foodCombo: r.activeCombo ? r.activeCombo.label : 'None',
           subtotal: r.lineTotal,
+          priceAdjustmentReason:
+            r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier ? r.dateAdjustment.label : '',
+          priceAdjustmentMultiplier:
+            r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier ? r.dateAdjustment.multiplier : 1,
         })),
         grandTotal,
       }),
@@ -582,6 +810,9 @@ export default function App() {
           '   Time slot: ' + r.activeTimeSlot.label + ' (' + r.activeTimeSlot.range + ')\n' +
           '   Desired attendees: ' + r.desiredAttendees + '\n' +
           '   Required tickets: ' + r.selectedAudi.requiredTickets + ' x ' + formatINR(r.selectedAudi.rate) + ' = ' + formatINR(r.ticketSubtotal) + '\n' +
+          (r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier
+            ? '   Price adjustment: ' + formatSurgeNote(r.dateAdjustment) + '\n'
+            : '') +
           '   Food: ' + (r.activeCombo ? r.activeCombo.label : 'None') + ' x ' + r.desiredAttendees + ' = ' + (r.foodSubtotal ? formatINR(r.foodSubtotal) : 'None') + '\n' +
           '   Subtotal: ' + formatINR(r.lineTotal)
         );
@@ -640,6 +871,10 @@ export default function App() {
           movieName: r.movieName,
           foodCombo: r.activeCombo ? r.activeCombo.label : 'None',
           subtotal: r.lineTotal,
+          priceAdjustmentReason:
+            r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier ? r.dateAdjustment.label : '',
+          priceAdjustmentMultiplier:
+            r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier ? r.dateAdjustment.multiplier : 1,
         })),
         grandTotal: psGrandTotal,
       }),
@@ -691,6 +926,29 @@ export default function App() {
     resetFormFields();
   }
 
+  function downloadQuotePdf() {
+    const cinemaSections = completeCinemas.map((r) => ({
+      heading: `${r.cinemaName} — ${getCityForCinema(r.cinemaName)}`,
+      rows: [
+        ['Format', r.format],
+        ['Time slot', `${r.activeTimeSlot.label} (${r.activeTimeSlot.range})`],
+        ['Request date', r.requestDate],
+        ['Tickets', `${r.ticketCount} × ${formatINRForPdf(r.activePrice)}`],
+        ['Food', r.activeCombo ? r.activeCombo.label : 'None'],
+        ...(r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier
+          ? [['Price adjustment', formatSurgeNote(r.dateAdjustment)]]
+          : []),
+      ],
+      subtotal: r.lineTotal,
+    }));
+    buildQuotePdf({
+      bookingType: 'Bulk Booking',
+      referenceId,
+      cinemaSections,
+      grandTotal,
+    });
+  }
+
   function handleReset() {
     setStatus('form');
     setConfirmedFirstName('');
@@ -699,7 +957,7 @@ export default function App() {
 
   const minDateStr = useMemo(() => {
     const d = new Date();
-    d.setDate(d.getDate() + 7);
+    d.setDate(d.getDate() + 15);
     return d.toISOString().split('T')[0];
   }, []);
 
@@ -755,13 +1013,13 @@ export default function App() {
           background: radial-gradient(ellipse at top, #201a1a 0%, var(--bg) 55%);
           color: var(--ink);
           min-height: 100vh;
-          padding: 32px 16px 64px;
+          padding: 32px 32px 64px;
           box-sizing: border-box;
           overflow-x: hidden;
         }
         .pb-page * { box-sizing: border-box; }
 
-        .pb-shell { max-width: 980px; margin: 0 auto; }
+        .pb-shell { max-width: 1440px; margin: 0 auto; }
 
         .pb-header { margin-bottom: 28px; }
         .pb-eyebrow {
@@ -788,7 +1046,7 @@ export default function App() {
           align-items: center;
           justify-content: space-between;
           gap: 12px;
-          margin-bottom: 16px;
+          margin-bottom: 28px;
         }
         .pb-brand-logo {
           display: flex;
@@ -799,7 +1057,13 @@ export default function App() {
           letter-spacing: 0.02em;
           line-height: 1;
           flex-shrink: 0;
+          background: transparent;
+          border: none;
+          padding: 0;
+          cursor: pointer;
+          transition: opacity 0.15s;
         }
+        .pb-brand-logo:hover { opacity: 0.8; }
         .pb-brand-pvr, .pb-brand-inox { color: var(--gold); }
         .pb-brand-star { color: var(--ink); font-size: 13px; }
         .pb-lookup-trigger {
@@ -956,12 +1220,12 @@ export default function App() {
         .pb-grid {
           display: grid;
           grid-template-columns: 1.3fr 1fr;
-          gap: 24px;
+          gap: 40px;
           align-items: start;
         }
         .pb-grid-left { grid-column: 1; }
         @media (max-width: 860px) {
-          .pb-grid { grid-template-columns: 1fr; }
+          .pb-grid { grid-template-columns: 1fr; gap: 24px; }
           .pb-grid-left { grid-column: 1; }
         }
 
@@ -969,7 +1233,7 @@ export default function App() {
           background: var(--surface);
           border: 1px solid var(--line);
           border-radius: 14px;
-          padding: 24px;
+          padding: 32px;
         }
 
         .pb-field { margin-bottom: 20px; position: relative; }
@@ -1004,6 +1268,10 @@ export default function App() {
         }
 
         .pb-date-help { font-size: 11px; color: var(--ink-muted); margin-top: 6px; }
+
+        .pb-movie-note { font-size: 13px; color: var(--ink-muted); line-height: 1.5; margin: 0; }
+        .pb-movie-link { color: var(--gold); text-decoration: underline; }
+        .pb-movie-link:hover { color: var(--red); }
 
         .pb-suggestions {
           position: absolute;
@@ -1179,6 +1447,18 @@ export default function App() {
         .pb-pill-price-muted { opacity: 0.55; font-style: italic; }
 
         .pb-field-warning {
+          margin-top: 6px;
+          font-size: 11.5px;
+          font-weight: 600;
+          color: var(--gold);
+        }
+        .pb-date-blocked-warning {
+          margin-top: 6px;
+          font-size: 11.5px;
+          font-weight: 700;
+          color: var(--red);
+        }
+        .pb-date-surge-note {
           margin-top: 6px;
           font-size: 11.5px;
           font-weight: 600;
@@ -1493,18 +1773,18 @@ export default function App() {
         }
       `}</style>
 
-      <div className="pb-shell">
-        <div className="pb-top-bar">
-          <div className="pb-brand-logo" aria-label="PVR INOX">
-            <span className="pb-brand-pvr">PVR</span>
-            <span className="pb-brand-star">&#9733;</span>
-            <span className="pb-brand-inox">INOX</span>
-          </div>
-          <button type="button" className="pb-lookup-trigger" onClick={openLookupModal}>
-            Check a reference number
-          </button>
-        </div>
+      <div className="pb-top-bar">
+        <button type="button" className="pb-brand-logo" aria-label="PVR INOX — return to booking type choice" onClick={() => setMode(null)}>
+          <span className="pb-brand-pvr">PVR</span>
+          <span className="pb-brand-star">&#9733;</span>
+          <span className="pb-brand-inox">INOX</span>
+        </button>
+        <button type="button" className="pb-lookup-trigger" onClick={openLookupModal}>
+          Check a reference number
+        </button>
+      </div>
 
+      <div className="pb-shell">
         {mode === null && (
           <div className="pb-landing">
             <p className="pb-landing-eyebrow">PVR INOX Group &amp; Private Bookings</p>
@@ -1766,7 +2046,13 @@ export default function App() {
                               value={r.requestDate}
                               onChange={(e) => updateCinemaDetail(r.cinemaName, { requestDate: e.target.value })}
                             />
-                            <div className="pb-date-help">7 or more days from today.</div>
+                            <div className="pb-date-help">You can only select a date 15 or more days from today.</div>
+                            {r.dateAdjustment && r.dateAdjustment.blocked && (
+                              <div className="pb-date-blocked-warning">{r.dateAdjustment.label}</div>
+                            )}
+                            {r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier && (
+                              <div className="pb-date-surge-note">{formatSurgeNote(r.dateAdjustment)}</div>
+                            )}
                           </div>
                         </div>
 
@@ -1809,16 +2095,19 @@ export default function App() {
                           </div>
 
                           <div className="pb-field" style={{ marginBottom: 0 }}>
-                            <label className="pb-label">
-                              Movie name<span className="pb-required">*</span>
-                            </label>
-                            <input
-                              className="pb-input"
-                              placeholder="Which movie is this for?"
-                              value={r.movieName}
-                              onChange={(e) => updateCinemaDetail(r.cinemaName, { movieName: e.target.value })}
-                              required
-                            />
+                            <label className="pb-label">Movie</label>
+                            <p className="pb-movie-note">
+                              Movies are scheduled by the cinema and can&apos;t be pre-selected here. Check current
+                              showtimes at{' '}
+                              <a
+                                href="https://www.pvrcinemas.com/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="pb-movie-link"
+                              >
+                                pvrcinemas.com &rarr;
+                              </a>
+                            </p>
                           </div>
                         </div>
 
@@ -1908,10 +2197,6 @@ export default function App() {
                         <span className="pb-stub-row-value">{r.format}</span>
                       </div>
                       <div className="pb-stub-row">
-                        <span className="pb-stub-row-label">Movie</span>
-                        <span className="pb-stub-row-value">{r.movieName.trim() ? r.movieName : '—'}</span>
-                      </div>
-                      <div className="pb-stub-row">
                         <span className="pb-stub-row-label">Date</span>
                         <span className="pb-stub-row-value">{r.requestDate || '—'}</span>
                       </div>
@@ -1927,6 +2212,16 @@ export default function App() {
                         </span>
                         <span className="pb-stub-row-value">{r.ticketCount > 0 && r.activePrice ? formatINR(r.ticketTotal) : '—'}</span>
                       </div>
+                      {r.dateAdjustment && r.dateAdjustment.blocked && (
+                        <div style={{ fontSize: 11, color: 'var(--red-dim)', fontWeight: 700, padding: '0 0 6px', lineHeight: 1.4 }}>
+                          {r.dateAdjustment.label}
+                        </div>
+                      )}
+                      {r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier && (
+                        <div style={{ fontSize: 11, color: 'var(--red-dim)', padding: '0 0 6px', lineHeight: 1.4 }}>
+                          {formatSurgeNote(r.dateAdjustment)}
+                        </div>
+                      )}
                       <div className="pb-stub-row">
                         <span className="pb-stub-row-label">Food ({r.activeCombo.label})</span>
                         <span className="pb-stub-row-value">{r.foodTotal ? formatINR(r.foodTotal) : '—'}</span>
@@ -1978,6 +2273,9 @@ export default function App() {
                     {formError && <div className="pb-error">{formError}</div>}
 
                     <div className="pb-actions">
+                      <button className="pb-btn pb-btn-secondary" onClick={downloadQuotePdf}>
+                        Download PDF
+                      </button>
                       <button className="pb-btn pb-btn-secondary" onClick={handleNotInterested} disabled={status === 'sending'}>
                         Not right now
                       </button>
@@ -2286,7 +2584,13 @@ export default function App() {
                                 value={r.requestDate}
                                 onChange={(e) => updatePSCinemaDetail(r.cinemaName, { requestDate: e.target.value })}
                               />
-                              <div className="pb-date-help">7 or more days from today.</div>
+                              <div className="pb-date-help">You can only select a date 15 or more days from today.</div>
+                              {r.dateAdjustment && r.dateAdjustment.blocked && (
+                                <div className="pb-date-blocked-warning">{r.dateAdjustment.label}</div>
+                              )}
+                              {r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier && (
+                                <div className="pb-date-surge-note">{formatSurgeNote(r.dateAdjustment)}</div>
+                              )}
                             </div>
 
                             <div className="pb-field" style={{ marginBottom: 0 }}>
@@ -2481,6 +2785,16 @@ export default function App() {
                           tickets (90% of its {r.selectedAudi.capacity}-seat capacity).
                         </div>
                       )}
+                      {r.dateAdjustment && r.dateAdjustment.blocked && (
+                        <div style={{ fontSize: 11, color: 'var(--red-dim)', fontWeight: 700, padding: '0 0 6px', lineHeight: 1.4 }}>
+                          {r.dateAdjustment.label}
+                        </div>
+                      )}
+                      {r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier && (
+                        <div style={{ fontSize: 11, color: 'var(--red-dim)', padding: '0 0 6px', lineHeight: 1.4 }}>
+                          {formatSurgeNote(r.dateAdjustment)}
+                        </div>
+                      )}
                       <div className="pb-stub-row">
                         <span className="pb-stub-row-label">Food ({r.activeCombo.label})</span>
                         <span className="pb-stub-row-value">{r.foodSubtotal ? formatINR(r.foodSubtotal) : '—'}</span>
@@ -2532,6 +2846,9 @@ export default function App() {
                     {psFormError && <div className="pb-error">{psFormError}</div>}
 
                     <div className="pb-actions">
+                      <button className="pb-btn pb-btn-secondary" onClick={downloadPSQuotePdf}>
+                        Download PDF
+                      </button>
                       <button className="pb-btn pb-btn-secondary" onClick={handlePSNotInterested} disabled={psStatus === 'sending'}>
                         Not right now
                       </button>
@@ -2655,10 +2972,12 @@ export default function App() {
                             </span>
                           </div>
                         )}
-                        <div className="pb-stub-row">
-                          <span className="pb-stub-row-label">Movie</span>
-                          <span className="pb-stub-row-value">{c.movieName}</span>
-                        </div>
+                        {c.movieName && (
+                          <div className="pb-stub-row">
+                            <span className="pb-stub-row-label">Movie</span>
+                            <span className="pb-stub-row-value">{c.movieName}</span>
+                          </div>
+                        )}
                         <div className="pb-stub-row">
                           <span className="pb-stub-row-label">Date</span>
                           <span className="pb-stub-row-value">{formatPlainDate(c.requestDate)}</span>

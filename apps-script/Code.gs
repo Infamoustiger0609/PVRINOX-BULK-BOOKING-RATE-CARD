@@ -40,6 +40,8 @@ const COLUMNS = [
   'Movie Name',
   'Food Combo',
   'Subtotal',
+  'Price Adjustment Reason',
+  'Price Adjustment Multiplier',
   'Grand Total',
 ];
 
@@ -110,6 +112,10 @@ function doPost(e) {
           return c.foodCombo;
         case 'Subtotal':
           return c.subtotal;
+        case 'Price Adjustment Reason':
+          return c.priceAdjustmentReason || '';
+        case 'Price Adjustment Multiplier':
+          return c.priceAdjustmentMultiplier != null ? c.priceAdjustmentMultiplier : 1;
         case 'Grand Total':
           return body.grandTotal;
         default:
@@ -162,6 +168,8 @@ function doGet(e) {
       movieName: val(row, 'Movie Name'),
       foodCombo: val(row, 'Food Combo'),
       subtotal: val(row, 'Subtotal'),
+      priceAdjustmentReason: val(row, 'Price Adjustment Reason'),
+      priceAdjustmentMultiplier: val(row, 'Price Adjustment Multiplier'),
     };
   });
 

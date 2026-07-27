@@ -59,6 +59,33 @@ still work but submitting the lead form will fail.
    };
    ```
 
+## Google Apps Script setup (lead storage + reference lookup)
+
+Both the "I'm interested" submit flow and the "Check a reference number"
+lookup talk to a Google Apps Script web app (`APPS_SCRIPT_URL` in
+`src/App.jsx`). The script's source lives in this repo at
+[`apps-script/Code.gs`](apps-script/Code.gs) — it's not auto-deployed, so
+whenever it changes:
+
+1. Open the Apps Script project behind your `APPS_SCRIPT_URL`
+   (script.google.com).
+2. Replace its contents with `apps-script/Code.gs`.
+3. **Deploy -> Manage deployments -> Edit -> New version** so the change
+   goes live at the same URL.
+
+It backs both booking flows with a single "Leads" sheet (auto-created on
+first submission), one row per cinema in a quote. A "Booking Type" column
+tells Bulk Booking and Private Screening rows apart; the audi-specific
+columns (Audi Number, Audi Capacity, Required Tickets, Desired Attendees)
+are simply blank for Bulk Booking rows.
+
+## Private screening dataset
+
+Private Screening's cinema/audi data is fetched at runtime from
+`public/data/private_screening_data.json` (not bundled into the JS, and
+not committed as literal code) — replace that file to update pricing or
+add cinemas.
+
 ## Deploy
 
 **Option A — Vercel CLI**

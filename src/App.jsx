@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 
 /* ---------------------------------------------------------------
    PVR INOX — Group Booking Quote Tool
@@ -43,7 +43,20 @@ function getCityForCinema(name) {
 }
 
 // "Delhi NCR" quick-select in the city dropdown expands to this set — edit here to change it
-const NCR_CITIES = ['Delhi', 'Gurugram', 'Gurgaon', 'Noida', 'Faridabad', 'Ghaziabad'];
+const NCR_CITIES = ['Delhi', 'New Delhi', 'Gurugram', 'Gurgaon', 'Noida', 'Greater Noida', 'Faridabad', 'Ghaziabad'];
+
+function toTitleCase(str) {
+  return str.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Shared by bulk booking (CINEMA_DATA, city derived from the cinema name) and private
+// screening (fetched dataset, city read from an explicit field) — each dataset supplies
+// its own getCityFn so this just handles building + de-duping + sorting once.
+function buildCinemaAndCityLists(dataset, getCityFn) {
+  const cinemaNames = Object.keys(dataset);
+  const allCities = Array.from(new Set(cinemaNames.map(getCityFn))).sort((a, b) => a.localeCompare(b));
+  return { cinemaNames, allCities };
+}
 
 const TIME_SLOTS = [
   { id: 'morning', label: 'Morning', range: '8:00 AM – 12:00 PM' },
@@ -61,8 +74,10 @@ const FOOD_COMBOS = [
   { id: 'mediumBurger', label: 'Medium Combo + Burger', items: 'Medium pepsi + medium popcorn + burger', price: 850 },
 ];
 
-const CINEMA_NAMES = Object.keys(CINEMA_DATA);
-const ALL_CITIES = Array.from(new Set(CINEMA_NAMES.map(getCityForCinema))).sort((a, b) => a.localeCompare(b));
+const { cinemaNames: CINEMA_NAMES, allCities: ALL_CITIES } = buildCinemaAndCityLists(CINEMA_DATA, getCityForCinema);
+// NCR_CITIES also covers private screening's city spellings ("New Delhi", "Greater Noida"), which
+// never occur in the bulk-booking dataset — scope the "Delhi NCR" shortcut to what's actually selectable here.
+const BULK_NCR_CITIES = NCR_CITIES.filter((c) => ALL_CITIES.includes(c));
 
 function generateReferenceId() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -101,6 +116,8 @@ function formatSubmittedOn(value) {
 }
 
 export default function App() {
+  const [mode, setMode] = useState(null); // null | 'bulkBooking' | 'privateScreening'
+
   const [referenceId, setReferenceId] = useState(generateReferenceId);
 
   const [showCityDropdown, setShowCityDropdown] = useState(false);
@@ -125,7 +142,76 @@ export default function App() {
   const [lookupStatus, setLookupStatus] = useState('idle'); // idle | loading | found | not-found | error
   const [lookupResult, setLookupResult] = useState(null);
 
-  const isNcrSelected = NCR_CITIES.every((c) => selectedCities.includes(c));
+  // ---- Private Screening: data is fetched at runtime (not bundled), only once the flow is entered ----
+  const [privateScreeningData, setPrivateScreeningData] = useState(null);
+  const [dataError, setDataError] = useState(false);
+
+  function fetchPrivateScreeningData() {
+    setDataError(false);
+    fetch('/data/private_screening_data.json')
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to load private screening data');
+        return res.json();
+      })
+      .then(setPrivateScreeningData)
+      .catch(() => setDataError(true));
+  }
+
+  useEffect(() => {
+    if (mode !== 'privateScreening' || privateScreeningData) return;
+    fetchPrivateScreeningData();
+  }, [mode, privateScreeningData]);
+
+  const [psShowCityDropdown, setPSShowCityDropdown] = useState(false);
+  const [psSelectedCities, setPSSelectedCities] = useState([]);
+  const [psCityQuery, setPSCityQuery] = useState('');
+
+  const [psShowCinemaDropdown, setPSShowCinemaDropdown] = useState(false);
+  const [psSelectedCinemaNames, setPSSelectedCinemaNames] = useState([]);
+  const [psCinemaQuery, setPSCinemaQuery] = useState('');
+  // { [cinemaName]: { timeSlotId, desiredAttendeesInput, selectedAudiNumber, requestDate, movieName, foodComboId, foodDropdownOpen, timeSlotDropdownOpen } }
+  const [psCinemaDetails, setPSCinemaDetails] = useState({});
+  const psCinemaFieldRef = useRef(null);
+
+  const [psReferenceId, setPSReferenceId] = useState(generateReferenceId);
+  const [psName, setPSName] = useState('');
+  const [psPhone, setPSPhone] = useState('');
+  const [psEmail, setPSEmail] = useState('');
+  const [psStatus, setPSStatus] = useState('form'); // form | sending | interested | declined
+  const [psFormError, setPSFormError] = useState('');
+  const [psConfirmedFirstName, setPSConfirmedFirstName] = useState('');
+
+  const { cinemaNames: PS_CINEMA_NAMES, allCities: PS_ALL_CITIES } = useMemo(() => {
+    if (!privateScreeningData) return { cinemaNames: [], allCities: [] };
+    return buildCinemaAndCityLists(privateScreeningData, (name) => toTitleCase(privateScreeningData[name]?.city || ''));
+  }, [privateScreeningData]);
+
+  const psNcrCities = useMemo(() => NCR_CITIES.filter((c) => PS_ALL_CITIES.includes(c)), [PS_ALL_CITIES]);
+  const isPSNcrSelected = psNcrCities.length > 0 && psNcrCities.every((c) => psSelectedCities.includes(c));
+
+  const psCityFilteredCinemaNames = useMemo(() => {
+    const pool =
+      psSelectedCities.length === 0
+        ? PS_CINEMA_NAMES
+        : PS_CINEMA_NAMES.filter((c) => psSelectedCities.includes(toTitleCase(privateScreeningData?.[c]?.city || '')));
+    return pool.slice().sort((a, b) => a.localeCompare(b));
+  }, [PS_CINEMA_NAMES, psSelectedCities, privateScreeningData]);
+
+  const psCityQueryTrimmed = psCityQuery.trim().toLowerCase();
+  const showAllPSCitiesOption = psCityQueryTrimmed === '';
+  const showPSDelhiNcrOption = psNcrCities.length > 0 && (psCityQueryTrimmed === '' || 'delhi ncr'.includes(psCityQueryTrimmed));
+  const filteredPSCityOptions = useMemo(() => {
+    if (!psCityQueryTrimmed) return PS_ALL_CITIES;
+    return PS_ALL_CITIES.filter((c) => c.toLowerCase().includes(psCityQueryTrimmed));
+  }, [PS_ALL_CITIES, psCityQueryTrimmed]);
+
+  const psCinemaQueryTrimmed = psCinemaQuery.trim().toLowerCase();
+  const filteredPSCinemaOptions = useMemo(() => {
+    if (!psCinemaQueryTrimmed) return psCityFilteredCinemaNames;
+    return psCityFilteredCinemaNames.filter((c) => c.toLowerCase().includes(psCinemaQueryTrimmed));
+  }, [psCityFilteredCinemaNames, psCinemaQueryTrimmed]);
+
+  const isNcrSelected = BULK_NCR_CITIES.every((c) => selectedCities.includes(c));
 
   const cityFilteredCinemaNames = useMemo(() => {
     const pool = selectedCities.length === 0 ? CINEMA_NAMES : CINEMA_NAMES.filter((c) => selectedCities.includes(getCityForCinema(c)));
@@ -186,16 +272,191 @@ export default function App() {
   const quoteReady = Boolean(selectedCinemaNames.length > 0 && completeCinemas.length === selectedCinemaNames.length);
   const grandTotal = computedCinemas.reduce((sum, r) => sum + r.lineTotal, 0);
 
+  const computedPSCinemas = psSelectedCinemaNames.map((cinemaName) => {
+    const detail = psCinemaDetails[cinemaName] || {
+      timeSlotId: null,
+      desiredAttendeesInput: '',
+      selectedAudiNumber: null,
+      requestDate: '',
+      movieName: '',
+      foodComboId: 'none',
+      foodDropdownOpen: false,
+      timeSlotDropdownOpen: false,
+    };
+    const cinemaEntry = privateScreeningData?.[cinemaName] || { city: '', audis: [] };
+    const audis = cinemaEntry.audis || [];
+    const activeTimeSlot = TIME_SLOTS.find((t) => t.id === detail.timeSlotId) || null;
+    const activeCombo = FOOD_COMBOS.find((c) => c.id === detail.foodComboId);
+    const desiredAttendees = Math.max(0, parseInt(detail.desiredAttendeesInput, 10) || 0);
+
+    const rawAudiOptions = audis.map((a) => {
+      const ninetyPercentFloor = Math.ceil(a.capacity * 0.9);
+      const rate = detail.timeSlotId ? a[detail.timeSlotId] : null;
+      const requiredTickets = desiredAttendees > 0 ? Math.max(desiredAttendees, ninetyPercentFloor) : null;
+      const flooredByMinimum = desiredAttendees > 0 && desiredAttendees < ninetyPercentFloor;
+      const disabled = desiredAttendees > 0 && a.capacity < desiredAttendees;
+      const subtotal = rate != null && requiredTickets != null ? rate * requiredTickets : null;
+      return { ...a, ninetyPercentFloor, rate, requiredTickets, flooredByMinimum, disabled, subtotal };
+    });
+
+    const cheapestAudiNumber = (() => {
+      const valid = rawAudiOptions.filter((a) => !a.disabled && a.subtotal != null);
+      if (!valid.length) return null;
+      return valid.reduce((best, a) => (a.subtotal < best.subtotal ? a : best), valid[0]).audi;
+    })();
+
+    // Cheapest-and-valid first; disabled ones always sink to the bottom regardless of price.
+    const audiOptions =
+      desiredAttendees > 0
+        ? rawAudiOptions.slice().sort((a, b) => {
+            if (a.disabled !== b.disabled) return a.disabled ? 1 : -1;
+            const aVal = a.subtotal == null ? Infinity : a.subtotal;
+            const bVal = b.subtotal == null ? Infinity : b.subtotal;
+            return aVal - bVal;
+          })
+        : rawAudiOptions;
+
+    const selectedAudi =
+      detail.selectedAudiNumber != null ? rawAudiOptions.find((a) => a.audi === detail.selectedAudiNumber) || null : null;
+
+    const ticketSubtotal = selectedAudi && selectedAudi.subtotal != null ? selectedAudi.subtotal : 0;
+    const foodSubtotal = activeCombo ? activeCombo.price * desiredAttendees : 0;
+    const lineTotal = ticketSubtotal + foodSubtotal;
+
+    return {
+      cinemaName,
+      city: cinemaEntry.city,
+      ...detail,
+      desiredAttendees,
+      audis,
+      audiOptions,
+      cheapestAudiNumber,
+      selectedAudi,
+      activeTimeSlot,
+      activeCombo,
+      ticketSubtotal,
+      foodSubtotal,
+      lineTotal,
+    };
+  });
+
+  const completePSCinemas = computedPSCinemas.filter(
+    (r) => r.timeSlotId && r.desiredAttendees > 0 && r.selectedAudi && r.requestDate && r.movieName.trim()
+  );
+  const psQuoteReady = Boolean(psSelectedCinemaNames.length > 0 && completePSCinemas.length === psSelectedCinemaNames.length);
+  const psGrandTotal = computedPSCinemas.reduce((sum, r) => sum + r.lineTotal, 0);
+
   function toggleCity(city) {
     setSelectedCities((cities) => (cities.includes(city) ? cities.filter((c) => c !== city) : [...cities, city]));
   }
 
   function toggleDelhiNCR() {
     setSelectedCities((cities) => {
-      const allSelected = NCR_CITIES.every((c) => cities.includes(c));
-      if (allSelected) return cities.filter((c) => !NCR_CITIES.includes(c));
-      return Array.from(new Set([...cities, ...NCR_CITIES]));
+      const allSelected = BULK_NCR_CITIES.every((c) => cities.includes(c));
+      if (allSelected) return cities.filter((c) => !BULK_NCR_CITIES.includes(c));
+      return Array.from(new Set([...cities, ...BULK_NCR_CITIES]));
     });
+  }
+
+  function togglePSCity(city) {
+    setPSSelectedCities((cities) => (cities.includes(city) ? cities.filter((c) => c !== city) : [...cities, city]));
+  }
+
+  function togglePSDelhiNCR() {
+    setPSSelectedCities((cities) => {
+      const allSelected = psNcrCities.every((c) => cities.includes(c));
+      if (allSelected) return cities.filter((c) => !psNcrCities.includes(c));
+      return Array.from(new Set([...cities, ...psNcrCities]));
+    });
+  }
+
+  function updatePSCinemaDetail(cinemaName, patch) {
+    setPSCinemaDetails((details) => ({ ...details, [cinemaName]: { ...details[cinemaName], ...patch } }));
+  }
+
+  function togglePSCinemaSelection(cinemaName) {
+    if (psSelectedCinemaNames.includes(cinemaName)) {
+      setPSSelectedCinemaNames((names) => names.filter((n) => n !== cinemaName));
+      setPSCinemaDetails((details) => {
+        const next = { ...details };
+        delete next[cinemaName];
+        return next;
+      });
+    } else {
+      setPSSelectedCinemaNames((names) => [...names, cinemaName]);
+      setPSCinemaDetails((details) => ({
+        ...details,
+        [cinemaName]: {
+          timeSlotId: null,
+          desiredAttendeesInput: '',
+          selectedAudiNumber: null,
+          requestDate: '',
+          movieName: '',
+          foodComboId: 'none',
+          foodDropdownOpen: false,
+          timeSlotDropdownOpen: false,
+        },
+      }));
+    }
+  }
+
+  function removePSCinema(cinemaName) {
+    setPSSelectedCinemaNames((names) => names.filter((n) => n !== cinemaName));
+    setPSCinemaDetails((details) => {
+      const next = { ...details };
+      delete next[cinemaName];
+      return next;
+    });
+  }
+
+  function resetPSFormFields() {
+    setPSSelectedCities([]);
+    setPSShowCityDropdown(false);
+    setPSSelectedCinemaNames([]);
+    setPSCinemaDetails({});
+    setPSShowCinemaDropdown(false);
+    setPSName('');
+    setPSPhone('');
+    setPSEmail('');
+    setPSFormError('');
+  }
+
+  async function handlePSInterested() {
+    setPSFormError('');
+    if (!psName.trim() || !psPhone.trim()) {
+      setPSFormError('Please add your name and phone number so our team can reach you.');
+      return;
+    }
+    if (!/^[0-9+\-\s]{7,15}$/.test(psPhone.trim())) {
+      setPSFormError('That phone number looks off — please double check it.');
+      return;
+    }
+
+    const newReferenceId = generateReferenceId();
+    setPSReferenceId(newReferenceId);
+
+    setPSStatus('sending');
+    try {
+      await Promise.all([sendPSLeadEmail(newReferenceId), submitPSLeadToSheet(newReferenceId)]);
+    } catch (err) {
+      // The customer should never see backend plumbing trouble.
+      // If leads stop arriving, check EMAILJS_CONFIG, APPS_SCRIPT_URL and the browser console.
+      console.error(err);
+    }
+    setPSConfirmedFirstName(psName.trim().split(' ')[0] || '');
+    setPSStatus('interested');
+    resetPSFormFields();
+  }
+
+  function handlePSNotInterested() {
+    setPSStatus('declined');
+    resetPSFormFields();
+  }
+
+  function handlePSReset() {
+    setPSStatus('form');
+    setPSConfirmedFirstName('');
+    resetPSFormFields();
   }
 
   function updateCinemaDetail(cinemaName, patch) {
@@ -292,6 +553,7 @@ export default function App() {
         phone,
         email: email || 'Not provided',
         cinemas: completeCinemas.map((r) => ({
+          bookingType: 'Bulk Booking',
           cinema: r.cinemaName,
           format: r.format,
           timeSlot: r.activeTimeSlot.label,
@@ -304,6 +566,82 @@ export default function App() {
           subtotal: r.lineTotal,
         })),
         grandTotal,
+      }),
+    });
+  }
+
+  async function sendPSLeadEmail(refId) {
+    const cinemasSummary = completePSCinemas
+      .map((r, idx) => {
+        const prefix = completePSCinemas.length > 1 ? idx + 1 + '. ' : '';
+        return (
+          prefix + r.cinemaName + ' — Private Screening\n' +
+          '   Audi: ' + r.selectedAudi.audi + ' (' + r.selectedAudi.format + ', ' + r.selectedAudi.capacity + ' seats)\n' +
+          '   Movie: ' + r.movieName + '\n' +
+          '   Date: ' + r.requestDate + '\n' +
+          '   Time slot: ' + r.activeTimeSlot.label + ' (' + r.activeTimeSlot.range + ')\n' +
+          '   Desired attendees: ' + r.desiredAttendees + '\n' +
+          '   Required tickets: ' + r.selectedAudi.requiredTickets + ' x ' + formatINR(r.selectedAudi.rate) + ' = ' + formatINR(r.ticketSubtotal) + '\n' +
+          '   Food: ' + (r.activeCombo ? r.activeCombo.label : 'None') + ' x ' + r.desiredAttendees + ' = ' + (r.foodSubtotal ? formatINR(r.foodSubtotal) : 'None') + '\n' +
+          '   Subtotal: ' + formatINR(r.lineTotal)
+        );
+      })
+      .join('\n\n');
+
+    const templateParams = {
+      reference_id: refId,
+      cinemas_summary: cinemasSummary,
+      cinema_count: String(completePSCinemas.length),
+      grand_total: formatINR(psGrandTotal),
+      customer_name: psName,
+      customer_phone: psPhone,
+      customer_email: psEmail || 'Not provided',
+    };
+
+    const res = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        service_id: EMAILJS_CONFIG.serviceId,
+        template_id: EMAILJS_CONFIG.templateId,
+        user_id: EMAILJS_CONFIG.publicKey,
+        template_params: templateParams,
+      }),
+    });
+
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => '');
+      throw new Error('EmailJS request failed: ' + res.status + ' ' + bodyText);
+    }
+  }
+
+  async function submitPSLeadToSheet(refId) {
+    // text/plain avoids a CORS preflight, which Apps Script web apps don't handle
+    await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        referenceId: refId,
+        name: psName,
+        phone: psPhone,
+        email: psEmail || 'Not provided',
+        cinemas: completePSCinemas.map((r) => ({
+          bookingType: 'Private Screening',
+          cinema: r.cinemaName,
+          audiNumber: r.selectedAudi.audi,
+          audiFormat: r.selectedAudi.format,
+          audiCapacity: r.selectedAudi.capacity,
+          requiredTickets: r.selectedAudi.requiredTickets,
+          desiredAttendees: r.desiredAttendees,
+          timeSlot: r.activeTimeSlot.label,
+          timeSlotRange: r.activeTimeSlot.range,
+          pricePerTicket: r.selectedAudi.rate,
+          requestDate: r.requestDate,
+          movieName: r.movieName,
+          foodCombo: r.activeCombo ? r.activeCombo.label : 'None',
+          subtotal: r.lineTotal,
+        })),
+        grandTotal: psGrandTotal,
       }),
     });
   }
@@ -477,6 +815,87 @@ export default function App() {
           flex-shrink: 0;
         }
         .pb-lookup-trigger:hover { border-color: var(--gold); color: var(--gold); }
+
+        .pb-mode-back {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          background: transparent;
+          border: none;
+          color: var(--ink-muted);
+          font-size: 12.5px;
+          font-weight: 600;
+          cursor: pointer;
+          padding: 0;
+          margin-bottom: 14px;
+        }
+        .pb-mode-back:hover { color: var(--gold); }
+
+        .pb-landing { max-width: 760px; margin: 0 auto; text-align: center; padding: 40px 0; }
+        .pb-landing-eyebrow {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 11px;
+          letter-spacing: 0.18em;
+          text-transform: uppercase;
+          color: var(--gold);
+          margin: 0 0 10px;
+        }
+        .pb-landing-title {
+          font-family: 'Bebas Neue', sans-serif;
+          font-size: clamp(36px, 6vw, 56px);
+          letter-spacing: 0.02em;
+          line-height: 1;
+          margin: 0 0 12px;
+          color: var(--ink);
+        }
+        .pb-landing-title span { color: var(--red); }
+        .pb-landing-subtitle {
+          color: var(--ink-muted);
+          font-size: 15px;
+          line-height: 1.55;
+          margin: 0 auto 36px;
+          max-width: 480px;
+        }
+        .pb-landing-options {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 20px;
+        }
+        .pb-landing-option {
+          background: var(--surface);
+          border: 1px solid var(--line);
+          border-radius: 14px;
+          padding: 32px 24px;
+          text-align: left;
+          cursor: pointer;
+          transition: border-color 0.15s, transform 0.15s;
+        }
+        .pb-landing-option:hover { border-color: var(--gold); transform: translateY(-2px); }
+        .pb-landing-option-title {
+          font-family: 'Bebas Neue', sans-serif;
+          font-size: 26px;
+          letter-spacing: 0.02em;
+          color: var(--ink);
+          margin: 0 0 8px;
+        }
+        .pb-landing-option-desc {
+          color: var(--ink-muted);
+          font-size: 13.5px;
+          line-height: 1.5;
+          margin: 0 0 18px;
+        }
+        .pb-landing-option-cta {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 11.5px;
+          font-weight: 600;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: var(--red);
+        }
+        @media (max-width: 640px) {
+          .pb-landing { padding: 20px 0; }
+          .pb-landing-options { grid-template-columns: 1fr; }
+        }
 
         .pb-modal-backdrop {
           position: fixed;
@@ -766,6 +1185,76 @@ export default function App() {
           color: var(--gold);
         }
 
+        .pb-audi-hint {
+          font-size: 12.5px;
+          color: var(--ink-muted);
+          padding: 10px 0 0;
+        }
+        .pb-audi-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+          gap: 10px;
+        }
+        .pb-audi-card {
+          border: 1px solid var(--line);
+          background: var(--surface-2);
+          border-radius: 10px;
+          padding: 12px 14px;
+          cursor: pointer;
+          transition: border-color 0.15s, background 0.15s;
+          position: relative;
+        }
+        .pb-audi-card:hover { border-color: var(--gold); }
+        .pb-audi-card.active { border-color: var(--red); background: #2a1c1c; }
+        .pb-audi-card.disabled {
+          cursor: not-allowed;
+          opacity: 0.5;
+        }
+        .pb-audi-card.disabled:hover { border-color: var(--line); }
+        .pb-audi-card-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          gap: 6px;
+          margin-bottom: 4px;
+        }
+        .pb-audi-name { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+        .pb-audi-badge {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 9.5px;
+          font-weight: 700;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          color: var(--bg);
+          background: var(--gold);
+          padding: 2px 6px;
+          border-radius: 999px;
+          white-space: nowrap;
+        }
+        .pb-audi-capacity { font-size: 12px; color: var(--ink-muted); margin-bottom: 2px; }
+        .pb-audi-rate { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-muted); margin-bottom: 6px; }
+        .pb-audi-required {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 13px;
+          font-weight: 700;
+          color: var(--gold);
+          margin-top: 4px;
+        }
+        .pb-audi-note {
+          font-size: 11px;
+          line-height: 1.4;
+          color: var(--gold);
+          margin-top: 4px;
+        }
+        .pb-audi-note-error { color: var(--red); }
+        .pb-audi-subtotal {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 14px;
+          font-weight: 700;
+          color: var(--ink);
+          margin-top: 6px;
+        }
+
         .pb-combo-list { display: flex; flex-direction: column; gap: 8px; }
         .pb-combo {
           display: flex;
@@ -1016,9 +1505,39 @@ export default function App() {
           </button>
         </div>
 
+        {mode === null && (
+          <div className="pb-landing">
+            <p className="pb-landing-eyebrow">PVR INOX Group &amp; Private Bookings</p>
+            <h1 className="pb-landing-title">What are you <span>planning</span>?</h1>
+            <p className="pb-landing-subtitle">
+              Choose the type of booking you need a quote for — you can always come back and switch later.
+            </p>
+            <div className="pb-landing-options">
+              <div className="pb-landing-option" onClick={() => setMode('bulkBooking')}>
+                <h2 className="pb-landing-option-title">Bulk Booking</h2>
+                <p className="pb-landing-option-desc">
+                  Reserve a block of tickets across one or more cinemas for a large group, at a shared showtime.
+                </p>
+                <span className="pb-landing-option-cta">Get a bulk quote &rarr;</span>
+              </div>
+              <div className="pb-landing-option" onClick={() => setMode('privateScreening')}>
+                <h2 className="pb-landing-option-title">Private Screening</h2>
+                <p className="pb-landing-option-desc">
+                  Book an entire audi just for your group, and compare screens by capacity and price.
+                </p>
+                <span className="pb-landing-option-cta">Get a private screening quote &rarr;</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {mode === 'bulkBooking' && (
         <div className="pb-grid">
           <div className="pb-grid-left">
             <div className="pb-header">
+              <button type="button" className="pb-mode-back" onClick={() => setMode(null)}>
+                &larr; Change booking type
+              </button>
               <p className="pb-eyebrow"></p>
               <h1 className="pb-title">Get your <span>quote</span> in seconds</h1>
               <p className="pb-subtitle">
@@ -1087,7 +1606,7 @@ export default function App() {
                         onMouseDown={toggleDelhiNCR}
                       >
                         <input type="checkbox" readOnly checked={isNcrSelected} />
-                        Delhi NCR <span className="pb-ncr-hint">({NCR_CITIES.join(', ')})</span>
+                        Delhi NCR <span className="pb-ncr-hint">({BULK_NCR_CITIES.join(', ')})</span>
                       </div>
                     )}
                     {(showAllCitiesOption || showDelhiNcrOption) && filteredCityOptions.length > 0 && (
@@ -1498,6 +2017,561 @@ export default function App() {
             )}
           </div>
         </div>
+        )}
+
+        {mode === 'privateScreening' && (
+        <div className="pb-grid">
+          <div className="pb-grid-left">
+            <div className="pb-header">
+              <button type="button" className="pb-mode-back" onClick={() => setMode(null)}>
+                &larr; Change booking type
+              </button>
+              <h1 className="pb-title" style={{ fontSize: 32 }}>Private <span>Screening</span></h1>
+              <p className="pb-subtitle">
+                Book an entire audi for your group. Pick a city and cinema to start comparing screens.
+              </p>
+            </div>
+
+            {!privateScreeningData && !dataError && (
+              <div className="pb-empty-stub">Loading cinemas&hellip;</div>
+            )}
+
+            {dataError && (
+              <div className="pb-empty-stub">
+                Couldn&apos;t load private screening cinemas — please check your connection and try again.
+                <div style={{ marginTop: 14 }}>
+                  <button type="button" className="pb-btn pb-btn-primary" style={{ flex: 'none', padding: '9px 20px' }} onClick={fetchPrivateScreeningData}>
+                    Retry
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {privateScreeningData && (
+              <div className="pb-card">
+                <div className="pb-field">
+                  <label className="pb-label">City</label>
+                  <div className="pb-combobox">
+                    <input
+                      type="text"
+                      className="pb-input"
+                      placeholder={psSelectedCities.length === 0 ? 'Search cities...' : psSelectedCities.length + ' selected'}
+                      value={psCityQuery}
+                      onChange={(e) => {
+                        setPSCityQuery(e.target.value);
+                        setPSShowCityDropdown(true);
+                      }}
+                      onFocus={() => setPSShowCityDropdown(true)}
+                      onBlur={() =>
+                        setTimeout(() => {
+                          setPSShowCityDropdown(false);
+                          setPSCityQuery('');
+                        }, 120)
+                      }
+                    />
+                    <span className="pb-combobox-caret">&#9662;</span>
+                  </div>
+                  {psSelectedCities.length > 0 && (
+                    <div className="pb-chip-row">
+                      {psSelectedCities.map((city) => (
+                        <span key={city} className="pb-chip">
+                          {city}
+                          <button
+                            type="button"
+                            className="pb-chip-remove"
+                            onMouseDown={() => togglePSCity(city)}
+                            aria-label={'Remove ' + city}
+                          >
+                            &times;
+                          </button>
+                        </span>
+                      ))}
+                      <button type="button" className="pb-chip-clear" onMouseDown={() => setPSSelectedCities([])}>
+                        Clear all
+                      </button>
+                    </div>
+                  )}
+                  {psShowCityDropdown && (
+                    <div className="pb-suggestions pb-city-dropdown">
+                      {psCityQueryTrimmed === '' && (
+                        <div
+                          className={'pb-suggestion pb-city-option' + (psSelectedCities.length === 0 ? ' active' : '')}
+                          onMouseDown={() => setPSSelectedCities([])}
+                        >
+                          All cities
+                        </div>
+                      )}
+                      {showPSDelhiNcrOption && (
+                        <div
+                          className={'pb-suggestion pb-city-option' + (isPSNcrSelected ? ' active' : '')}
+                          onMouseDown={togglePSDelhiNCR}
+                        >
+                          <input type="checkbox" readOnly checked={isPSNcrSelected} />
+                          Delhi NCR <span className="pb-ncr-hint">({psNcrCities.join(', ')})</span>
+                        </div>
+                      )}
+                      {(showAllPSCitiesOption || showPSDelhiNcrOption) && filteredPSCityOptions.length > 0 && (
+                        <div className="pb-city-divider" />
+                      )}
+                      {filteredPSCityOptions.map((city) => (
+                        <div
+                          key={city}
+                          className={'pb-suggestion pb-city-option' + (psSelectedCities.includes(city) ? ' active' : '')}
+                          onMouseDown={() => togglePSCity(city)}
+                        >
+                          <input type="checkbox" readOnly checked={psSelectedCities.includes(city)} /> {city}
+                        </div>
+                      ))}
+                      {filteredPSCityOptions.length === 0 && !showPSDelhiNcrOption && (
+                        <div className="pb-suggestion" style={{ cursor: 'default' }}>
+                          No matching cities.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="pb-field" ref={psCinemaFieldRef}>
+                  <label className="pb-label">Cinemas</label>
+                  <div className="pb-combobox">
+                    <input
+                      type="text"
+                      className="pb-input"
+                      placeholder={
+                        psSelectedCinemaNames.length === 0 ? 'Search cinemas...' : psSelectedCinemaNames.length + ' selected'
+                      }
+                      value={psCinemaQuery}
+                      onChange={(e) => {
+                        setPSCinemaQuery(e.target.value);
+                        setPSShowCinemaDropdown(true);
+                      }}
+                      onFocus={() => setPSShowCinemaDropdown(true)}
+                      onBlur={() =>
+                        setTimeout(() => {
+                          setPSShowCinemaDropdown(false);
+                          setPSCinemaQuery('');
+                        }, 120)
+                      }
+                    />
+                    <span className="pb-combobox-caret">&#9662;</span>
+                  </div>
+                  {psShowCinemaDropdown && (
+                    <div className="pb-suggestions pb-city-dropdown">
+                      {psCityFilteredCinemaNames.length === 0 && (
+                        <div className="pb-suggestion" style={{ cursor: 'default' }}>
+                          No cinemas in the selected cities.
+                        </div>
+                      )}
+                      {psCityFilteredCinemaNames.length > 0 && filteredPSCinemaOptions.length === 0 && (
+                        <div className="pb-suggestion" style={{ cursor: 'default' }}>
+                          No matching cinemas.
+                        </div>
+                      )}
+                      {filteredPSCinemaOptions.map((c) => (
+                        <div
+                          key={c}
+                          className={'pb-suggestion pb-city-option' + (psSelectedCinemaNames.includes(c) ? ' active' : '')}
+                          onMouseDown={() => togglePSCinemaSelection(c)}
+                        >
+                          <input type="checkbox" readOnly checked={psSelectedCinemaNames.includes(c)} /> {c}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {computedPSCinemas.length > 0 && (
+                  <div className="pb-field" style={{ marginBottom: 0 }}>
+                    <div className="pb-cinema-rows">
+                      {computedPSCinemas.map((r, idx) => (
+                        <div key={r.cinemaName} className="pb-cinema-card">
+                          <div className="pb-cinema-card-head">
+                            <div>
+                              <span className="pb-cinema-card-index">
+                                {computedPSCinemas.length > 1 ? 'Cinema ' + (idx + 1) : 'Cinema'}
+                              </span>
+                              <div className="pb-cinema-card-name">{r.cinemaName}</div>
+                            </div>
+                            <button type="button" className="pb-cinema-remove" onClick={() => removePSCinema(r.cinemaName)}>
+                              Remove
+                            </button>
+                          </div>
+
+                          <div className="pb-two-col">
+                            <div className="pb-field" style={{ marginBottom: 0 }}>
+                              <label className="pb-label">Time slot</label>
+                              <button
+                                type="button"
+                                className="pb-input pb-select-trigger"
+                                onClick={() =>
+                                  updatePSCinemaDetail(r.cinemaName, { timeSlotDropdownOpen: !r.timeSlotDropdownOpen })
+                                }
+                                onBlur={() =>
+                                  setTimeout(() => updatePSCinemaDetail(r.cinemaName, { timeSlotDropdownOpen: false }), 120)
+                                }
+                              >
+                                <span>{r.activeTimeSlot ? r.activeTimeSlot.label : 'Select a time slot'}</span>
+                                <span className="pb-select-caret">&#9662;</span>
+                              </button>
+                              {r.timeSlotDropdownOpen && (
+                                <div className="pb-suggestions pb-food-dropdown">
+                                  <div className="pb-combo-list">
+                                    {TIME_SLOTS.map((t) => (
+                                      <div
+                                        key={t.id}
+                                        className={'pb-combo' + (r.timeSlotId === t.id ? ' active' : '')}
+                                        onMouseDown={() =>
+                                          updatePSCinemaDetail(r.cinemaName, { timeSlotId: t.id, timeSlotDropdownOpen: false })
+                                        }
+                                      >
+                                        <div>
+                                          <div className="pb-combo-name">{t.label}</div>
+                                          <div className="pb-combo-items">{t.range}</div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="pb-field" style={{ marginBottom: 0 }}>
+                              <label className="pb-label">Desired attendees</label>
+                              <div className="pb-stepper">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updatePSCinemaDetail(r.cinemaName, {
+                                      desiredAttendeesInput: String(Math.max(0, r.desiredAttendees - 1)),
+                                    })
+                                  }
+                                >
+                                  -
+                                </button>
+                                <input
+                                  className="pb-input"
+                                  type="number"
+                                  min={0}
+                                  placeholder="0"
+                                  value={r.desiredAttendeesInput}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    if (v === '' || /^[0-9]+$/.test(v)) updatePSCinemaDetail(r.cinemaName, { desiredAttendeesInput: v });
+                                  }}
+                                  onBlur={() => {
+                                    if (r.desiredAttendeesInput !== '' && (parseInt(r.desiredAttendeesInput, 10) || 0) < 0) {
+                                      updatePSCinemaDetail(r.cinemaName, { desiredAttendeesInput: '0' });
+                                    }
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updatePSCinemaDetail(r.cinemaName, { desiredAttendeesInput: String(r.desiredAttendees + 1) })
+                                  }
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="pb-two-col" style={{ marginTop: 14 }}>
+                            <div className="pb-field" style={{ marginBottom: 0 }}>
+                              <label className="pb-label">Request date</label>
+                              <input
+                                className="pb-input"
+                                type="date"
+                                min={minDateStr}
+                                value={r.requestDate}
+                                onChange={(e) => updatePSCinemaDetail(r.cinemaName, { requestDate: e.target.value })}
+                              />
+                              <div className="pb-date-help">7 or more days from today.</div>
+                            </div>
+
+                            <div className="pb-field" style={{ marginBottom: 0 }}>
+                              <label className="pb-label">
+                                Movie name<span className="pb-required">*</span>
+                              </label>
+                              <input
+                                className="pb-input"
+                                placeholder="Which movie is this for?"
+                                value={r.movieName}
+                                onChange={(e) => updatePSCinemaDetail(r.cinemaName, { movieName: e.target.value })}
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          <div className="pb-field" style={{ marginTop: 14, marginBottom: 0 }}>
+                            <label className="pb-label">Food &amp; beverages, per person</label>
+                            <button
+                              type="button"
+                              className="pb-input pb-select-trigger"
+                              onClick={() => updatePSCinemaDetail(r.cinemaName, { foodDropdownOpen: !r.foodDropdownOpen })}
+                              onBlur={() => setTimeout(() => updatePSCinemaDetail(r.cinemaName, { foodDropdownOpen: false }), 120)}
+                            >
+                              <span>{r.activeCombo.label}</span>
+                              <span className="pb-select-caret">&#9662;</span>
+                            </button>
+                            {r.foodDropdownOpen && (
+                              <div className="pb-suggestions pb-food-dropdown">
+                                <div className="pb-combo-list">
+                                  {FOOD_COMBOS.map((c) => (
+                                    <div
+                                      key={c.id}
+                                      className={'pb-combo' + (r.foodComboId === c.id ? ' active' : '')}
+                                      onMouseDown={() =>
+                                        updatePSCinemaDetail(r.cinemaName, { foodComboId: c.id, foodDropdownOpen: false })
+                                      }
+                                    >
+                                      <div>
+                                        <div className="pb-combo-name">{c.label}</div>
+                                        <div className="pb-combo-items">{c.items}</div>
+                                      </div>
+                                      <div className="pb-combo-price">{c.price ? formatINR(c.price) : '—'}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="pb-field" style={{ marginTop: 14, marginBottom: 0 }}>
+                            <label className="pb-label">Choose an audi</label>
+                            {!r.timeSlotId && (
+                              <div className="pb-audi-hint">Select a time slot above to compare audis.</div>
+                            )}
+                            {r.timeSlotId && (
+                              <>
+                                {r.desiredAttendees === 0 && (
+                                  <div className="pb-audi-hint">
+                                    Enter how many people are attending to see ticket requirements and pricing.
+                                  </div>
+                                )}
+                                <div className="pb-audi-grid" style={{ marginTop: r.desiredAttendees === 0 ? 8 : 0 }}>
+                                  {r.audiOptions.map((a) => (
+                                    <div
+                                      key={a.audi}
+                                      className={
+                                        'pb-audi-card' +
+                                        (r.selectedAudiNumber === a.audi ? ' active' : '') +
+                                        (a.disabled ? ' disabled' : '')
+                                      }
+                                      onClick={() => {
+                                        if (!a.disabled) updatePSCinemaDetail(r.cinemaName, { selectedAudiNumber: a.audi });
+                                      }}
+                                    >
+                                      <div className="pb-audi-card-head">
+                                        <span className="pb-audi-name">Audi {a.audi} &middot; {a.format}</span>
+                                        {!a.disabled && r.desiredAttendees > 0 && a.audi === r.cheapestAudiNumber && (
+                                          <span className="pb-audi-badge">Cheapest</span>
+                                        )}
+                                      </div>
+                                      <div className="pb-audi-capacity">{a.capacity} seats</div>
+                                      <div className="pb-audi-rate">{formatINR(a.rate)}/ticket</div>
+                                      {a.disabled && (
+                                        <div className="pb-audi-note pb-audi-note-error">
+                                          Group of {r.desiredAttendees} won&apos;t fit — capacity is {a.capacity}.
+                                        </div>
+                                      )}
+                                      {!a.disabled && r.desiredAttendees > 0 && (
+                                        <>
+                                          {a.flooredByMinimum ? (
+                                            <div className="pb-audi-note">
+                                              You need {r.desiredAttendees} seats — this audi requires a minimum of{' '}
+                                              {a.requiredTickets} tickets (90% of its {a.capacity}-seat capacity).
+                                            </div>
+                                          ) : (
+                                            <div className="pb-audi-required">{a.requiredTickets} tickets</div>
+                                          )}
+                                          <div className="pb-audi-subtotal">{formatINR(a.subtotal)}</div>
+                                        </>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      className="pb-add-cinema"
+                      onClick={() => {
+                        setPSShowCinemaDropdown(true);
+                        psCinemaFieldRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }}
+                    >
+                      + Add another cinema
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="pb-stub-wrap">
+            {psSelectedCinemaNames.length === 0 && psStatus === 'form' && (
+              <div className="pb-empty-stub">
+                Pick a city and select a cinema to start building your live quote — it fills in as you go.
+              </div>
+            )}
+
+            {psSelectedCinemaNames.length > 0 && psStatus === 'form' && (
+              <div className="pb-stub">
+                <div className="pb-stub-top">
+                  <div className="pb-stub-admit pb-stub-estimate">ESTIMATE</div>
+                  <div className="pb-stub-sub">
+                    {computedPSCinemas.length} cinema{computedPSCinemas.length > 1 ? 's' : ''} selected
+                  </div>
+                </div>
+                <div className="pb-stub-divider" />
+                <div className="pb-stub-rows">
+                  {computedPSCinemas.map((r, idx) => (
+                    <div key={r.cinemaName} className="pb-stub-cinema-block">
+                      {computedPSCinemas.length > 1 && (
+                        <div className="pb-stub-cinema-heading">{idx + 1}. {r.cinemaName}</div>
+                      )}
+                      {computedPSCinemas.length === 1 && (
+                        <div className="pb-stub-row">
+                          <span className="pb-stub-row-label">Cinema</span>
+                          <span className="pb-stub-row-value">{r.cinemaName}</span>
+                        </div>
+                      )}
+                      <div className="pb-stub-row">
+                        <span className="pb-stub-row-label">Audi</span>
+                        <span className="pb-stub-row-value">
+                          {r.selectedAudi
+                            ? `Audi ${r.selectedAudi.audi} (${r.selectedAudi.format}, ${r.selectedAudi.capacity} seats)`
+                            : '—'}
+                        </span>
+                      </div>
+                      <div className="pb-stub-row">
+                        <span className="pb-stub-row-label">Movie</span>
+                        <span className="pb-stub-row-value">{r.movieName.trim() ? r.movieName : '—'}</span>
+                      </div>
+                      <div className="pb-stub-row">
+                        <span className="pb-stub-row-label">Date</span>
+                        <span className="pb-stub-row-value">{r.requestDate || '—'}</span>
+                      </div>
+                      <div className="pb-stub-row">
+                        <span className="pb-stub-row-label">Time slot</span>
+                        <span className="pb-stub-row-value">
+                          {r.activeTimeSlot ? `${r.activeTimeSlot.label} (${r.activeTimeSlot.range})` : '—'}
+                        </span>
+                      </div>
+                      <div className="pb-stub-row">
+                        <span className="pb-stub-row-label">Attendees</span>
+                        <span className="pb-stub-row-value">{r.desiredAttendees > 0 ? r.desiredAttendees : '—'}</span>
+                      </div>
+                      <div className="pb-stub-row">
+                        <span className="pb-stub-row-label">
+                          {r.selectedAudi
+                            ? `Tickets required (${r.selectedAudi.requiredTickets} × ${formatINR(r.selectedAudi.rate)})`
+                            : 'Tickets required'}
+                        </span>
+                        <span className="pb-stub-row-value">{r.ticketSubtotal ? formatINR(r.ticketSubtotal) : '—'}</span>
+                      </div>
+                      {r.selectedAudi && r.selectedAudi.flooredByMinimum && (
+                        <div style={{ fontSize: 11, color: 'var(--red-dim)', padding: '0 0 6px', lineHeight: 1.4 }}>
+                          {r.desiredAttendees} attending — this audi requires a minimum of {r.selectedAudi.requiredTickets}{' '}
+                          tickets (90% of its {r.selectedAudi.capacity}-seat capacity).
+                        </div>
+                      )}
+                      <div className="pb-stub-row">
+                        <span className="pb-stub-row-label">Food ({r.activeCombo.label})</span>
+                        <span className="pb-stub-row-value">{r.foodSubtotal ? formatINR(r.foodSubtotal) : '—'}</span>
+                      </div>
+                      {computedPSCinemas.length > 1 && (
+                        <>
+                          <div className="pb-stub-row pb-stub-row-subtotal">
+                            <span className="pb-stub-row-label">Subtotal</span>
+                            <span className="pb-stub-row-value">{formatINR(r.lineTotal)}</span>
+                          </div>
+                          <div className="pb-tentative-note small"> Prices are tentative and may vary based on the final ticket price.</div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="pb-stub-total">
+                  <span className="pb-stub-total-label">
+                    {computedPSCinemas.length > 1 ? 'Combined estimated total' : 'Estimated total'}
+                  </span>
+                  <span className="pb-stub-total-value">{formatINR(psGrandTotal)}</span>
+                </div>
+                <div className="pb-tentative-note">Prices are tentative and may vary based on the final ticket price.</div>
+                <div className="pb-barcode">
+                  {Array.from({ length: 36 }).map((_, i) => (
+                    <span key={i} style={{ width: (i % 5 === 0 ? 3 : 1.5) + 'px' }} />
+                  ))}
+                </div>
+
+                {psQuoteReady && (
+                  <>
+                    <div className="pb-field" style={{ padding: '0 22px', marginBottom: 14 }}>
+                      <label className="pb-label" style={{ color: '#6b6058' }}>Your name</label>
+                      <input className="pb-input" style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
+                        value={psName} onChange={(e) => setPSName(e.target.value)} placeholder="Full name" />
+                    </div>
+                    <div className="pb-field" style={{ padding: '0 22px', marginBottom: 14 }}>
+                      <label className="pb-label" style={{ color: '#6b6058' }}>Phone number</label>
+                      <input className="pb-input" style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
+                        value={psPhone} onChange={(e) => setPSPhone(e.target.value)} placeholder="10-digit mobile number" />
+                    </div>
+                    <div className="pb-field" style={{ padding: '0 22px', marginBottom: 4 }}>
+                      <label className="pb-label" style={{ color: '#6b6058' }}>Email (optional)</label>
+                      <input className="pb-input" style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
+                        value={psEmail} onChange={(e) => setPSEmail(e.target.value)} placeholder="you@company.com" />
+                    </div>
+                    <div className="pb-contact-note">We only use this to follow up on your booking.</div>
+
+                    {psFormError && <div className="pb-error">{psFormError}</div>}
+
+                    <div className="pb-actions">
+                      <button className="pb-btn pb-btn-secondary" onClick={handlePSNotInterested} disabled={psStatus === 'sending'}>
+                        Not right now
+                      </button>
+                      <button className="pb-btn pb-btn-primary" onClick={handlePSInterested} disabled={psStatus === 'sending'}>
+                        {psStatus === 'sending' ? 'Sending...' : "I'm interested"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {psStatus === 'interested' && (
+              <div className="pb-stub">
+                <div className="pb-result">
+                  <div className="pb-result-title">You're all set</div>
+                  <p className="pb-result-text">
+                    Thanks{psConfirmedFirstName ? ', ' + psConfirmedFirstName : ''}! A member of our private screening team
+                    will call you shortly to confirm details and finalize pricing.
+                  </p>
+                  <div className="pb-result-ref">Reference: {psReferenceId}</div>
+                  <button className="pb-btn-reset" onClick={handlePSReset}>Start a new quote</button>
+                </div>
+              </div>
+            )}
+
+            {psStatus === 'declined' && (
+              <div className="pb-stub">
+                <div className="pb-result">
+                  <div className="pb-result-title">No worries</div>
+                  <p className="pb-result-text">
+                    Thanks for checking us out. Come back anytime you're ready to plan a private screening.
+                  </p>
+                  <button className="pb-btn-reset" onClick={handlePSReset}>Start a new quote</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        )}
       </div>
 
       {showLookupModal && (
@@ -1553,51 +2627,67 @@ export default function App() {
                 </div>
                 <div className="pb-stub-divider" />
                 <div className="pb-stub-rows">
-                  {(lookupResult.cinemas || []).map((c, idx) => (
-                    <div key={idx} className="pb-stub-cinema-block">
-                      {lookupResult.cinemas.length > 1 && (
-                        <div className="pb-stub-cinema-heading">{idx + 1}. {c.cinema}</div>
-                      )}
-                      {lookupResult.cinemas.length === 1 && (
+                  {(lookupResult.cinemas || []).map((c, idx) => {
+                    const isPrivateScreening = c.bookingType === 'Private Screening';
+                    return (
+                      <div key={idx} className="pb-stub-cinema-block">
+                        {lookupResult.cinemas.length > 1 && (
+                          <div className="pb-stub-cinema-heading">{idx + 1}. {c.cinema}</div>
+                        )}
+                        {lookupResult.cinemas.length === 1 && (
+                          <div className="pb-stub-row">
+                            <span className="pb-stub-row-label">Cinema</span>
+                            <span className="pb-stub-row-value">{c.cinema}</span>
+                          </div>
+                        )}
+                        {!isPrivateScreening && (
+                          <div className="pb-stub-row">
+                            <span className="pb-stub-row-label">Format</span>
+                            <span className="pb-stub-row-value">{c.format}</span>
+                          </div>
+                        )}
+                        {isPrivateScreening && (
+                          <div className="pb-stub-row">
+                            <span className="pb-stub-row-label">Audi</span>
+                            <span className="pb-stub-row-value">
+                              Audi {c.audiNumber} ({c.audiFormat}, {c.audiCapacity} seats) — {c.requiredTickets} tickets
+                              required for {c.desiredAttendees} guests
+                            </span>
+                          </div>
+                        )}
                         <div className="pb-stub-row">
-                          <span className="pb-stub-row-label">Cinema</span>
-                          <span className="pb-stub-row-value">{c.cinema}</span>
+                          <span className="pb-stub-row-label">Movie</span>
+                          <span className="pb-stub-row-value">{c.movieName}</span>
                         </div>
-                      )}
-                      <div className="pb-stub-row">
-                        <span className="pb-stub-row-label">Format</span>
-                        <span className="pb-stub-row-value">{c.format}</span>
-                      </div>
-                      <div className="pb-stub-row">
-                        <span className="pb-stub-row-label">Movie</span>
-                        <span className="pb-stub-row-value">{c.movieName}</span>
-                      </div>
-                      <div className="pb-stub-row">
-                        <span className="pb-stub-row-label">Date</span>
-                        <span className="pb-stub-row-value">{formatPlainDate(c.requestDate)}</span>
-                      </div>
-                      {c.timeSlot && (
                         <div className="pb-stub-row">
-                          <span className="pb-stub-row-label">Time slot</span>
-                          <span className="pb-stub-row-value">
-                            {c.timeSlot}{c.timeSlotRange ? ` (${c.timeSlotRange})` : ''}
-                          </span>
+                          <span className="pb-stub-row-label">Date</span>
+                          <span className="pb-stub-row-value">{formatPlainDate(c.requestDate)}</span>
                         </div>
-                      )}
-                      <div className="pb-stub-row">
-                        <span className="pb-stub-row-label">Tickets</span>
-                        <span className="pb-stub-row-value">{c.ticketCount}</span>
+                        {c.timeSlot && (
+                          <div className="pb-stub-row">
+                            <span className="pb-stub-row-label">Time slot</span>
+                            <span className="pb-stub-row-value">
+                              {c.timeSlot}{c.timeSlotRange ? ` (${c.timeSlotRange})` : ''}
+                            </span>
+                          </div>
+                        )}
+                        {!isPrivateScreening && (
+                          <div className="pb-stub-row">
+                            <span className="pb-stub-row-label">Tickets</span>
+                            <span className="pb-stub-row-value">{c.ticketCount}</span>
+                          </div>
+                        )}
+                        <div className="pb-stub-row">
+                          <span className="pb-stub-row-label">Food</span>
+                          <span className="pb-stub-row-value">{c.foodCombo}</span>
+                        </div>
+                        <div className="pb-stub-row pb-stub-row-subtotal">
+                          <span className="pb-stub-row-label">Subtotal</span>
+                          <span className="pb-stub-row-value">{formatINR(Number(c.subtotal) || 0)}</span>
+                        </div>
                       </div>
-                      <div className="pb-stub-row">
-                        <span className="pb-stub-row-label">Food</span>
-                        <span className="pb-stub-row-value">{c.foodCombo}</span>
-                      </div>
-                      <div className="pb-stub-row pb-stub-row-subtotal">
-                        <span className="pb-stub-row-label">Subtotal</span>
-                        <span className="pb-stub-row-value">{formatINR(Number(c.subtotal) || 0)}</span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <div className="pb-stub-total">
                   <span className="pb-stub-total-label">Tentative Grand total</span>

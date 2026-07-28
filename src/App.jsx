@@ -123,15 +123,22 @@ function formatSurgeNote(adjustment) {
 
 const EVENT_TYPES = [
   'Movie',
+  'Personal Celebrations',
   'Birthday Party',
   'Photo Shoot',
   'Wedding',
+  'Wedding Proposal',
+  'Bridal Shower',
+  'Pre-Wedding Screening',
   'Anniversary',
   'Engagement',
   'Baby Shower',
-  'Corporate Event',
-  'Product Launch',
-  'Reunion',
+  'Family Reunion',
+  'Corporate Events',
+  'Brand Activations & Launches',
+  'School & Community Events',
+  'Sports & Gaming',
+  'Filmmaker & Premieres',
   'Other',
 ];
 
@@ -1061,7 +1068,7 @@ export default function App() {
   const [psShowCinemaDropdown, setPSShowCinemaDropdown] = useState(false);
   const [psSelectedCinemaNames, setPSSelectedCinemaNames] = useState([]);
   const [psCinemaQuery, setPSCinemaQuery] = useState('');
-  // { [cinemaName]: { timeSlotId, desiredAttendeesInput, selectedAudiNumber, requestDate, eventType, eventDetail, eventTypeDropdownOpen, eventTypeQuery, foodComboId, foodDropdownOpen, timeSlotDropdownOpen } }
+  // { [cinemaName]: { timeSlotId, desiredAttendeesInput, selectedAudiNumbers, requestDate, eventType, eventDetail, eventTypeDropdownOpen, eventTypeQuery, foodComboId, foodDropdownOpen, timeSlotDropdownOpen } }
   const [psCinemaDetails, setPSCinemaDetails] = useState({});
   const psCinemaFieldRef = useRef(null);
 
@@ -1213,7 +1220,7 @@ export default function App() {
     const detail = psCinemaDetails[cinemaName] || {
       timeSlotId: null,
       desiredAttendeesInput: '',
-      selectedAudiNumber: null,
+      selectedAudiNumbers: [],
       requestDate: '',
       eventType: '',
       eventDetail: '',
@@ -1237,9 +1244,8 @@ export default function App() {
       const rate = baseRate != null ? baseRate * priceMultiplier : null;
       const requiredTickets = desiredAttendees > 0 ? Math.max(desiredAttendees, ninetyPercentFloor) : null;
       const flooredByMinimum = desiredAttendees > 0 && desiredAttendees < ninetyPercentFloor;
-      const disabled = desiredAttendees > 0 && a.capacity < desiredAttendees;
       const subtotal = rate != null && requiredTickets != null ? rate * requiredTickets : null;
-      return { ...a, ninetyPercentFloor, rate, requiredTickets, flooredByMinimum, disabled, subtotal };
+      return { ...a, ninetyPercentFloor, rate, requiredTickets, flooredByMinimum, subtotal };
     });
 
     const cheapestAudiNumber = (() => {
@@ -1261,12 +1267,12 @@ export default function App() {
           })
         : rawAudiOptions;
 
-    const selectedAudi =
-      detail.selectedAudiNumber != null ? rawAudiOptions.find((a) => a.audi === detail.selectedAudiNumber) || null : null;
+    const selectedAudis = rawAudiOptions.filter((a) => detail.selectedAudiNumbers.includes(a.audi));
 
-    const ticketSubtotal = selectedAudi && selectedAudi.subtotal != null ? selectedAudi.subtotal : 0;
+    const ticketSubtotal = selectedAudis.reduce((sum, a) => sum + (a.subtotal || 0), 0);
     const foodSubtotal = activeCombo ? activeCombo.price * desiredAttendees : 0;
     const lineTotal = ticketSubtotal + foodSubtotal;
+    const combinedCapacity = selectedAudis.reduce((sum, a) => sum + a.capacity, 0);
 
     return {
       cinemaName,
@@ -1276,7 +1282,8 @@ export default function App() {
       audis,
       audiOptions,
       cheapestAudiNumber,
-      selectedAudi,
+      selectedAudis,
+      combinedCapacity,
       activeTimeSlot,
       activeCombo,
       dateAdjustment,
@@ -1291,7 +1298,7 @@ export default function App() {
     (r) =>
       r.timeSlotId &&
       r.desiredAttendees > 0 &&
-      r.selectedAudi &&
+      r.selectedAudis.length > 0 &&
       r.requestDate &&
       r.eventType &&
       (!(r.eventType === 'Movie' || r.eventType === 'Other') || r.eventDetail.trim()) &&
@@ -1348,7 +1355,7 @@ export default function App() {
         [cinemaName]: {
           timeSlotId: null,
           desiredAttendeesInput: '',
-          selectedAudiNumber: null,
+          selectedAudiNumbers: [],
           requestDate: '',
           eventType: '',
           eventDetail: '',
@@ -1420,12 +1427,15 @@ export default function App() {
     const cinemaSections = completePSCinemas.map((r) => ({
       heading: `${r.cinemaName} — ${getCityForPSCinema(privateScreeningData, r.cinemaName)}`,
       rows: [
-        ['Audi', `Audi ${r.selectedAudi.audi} (${r.selectedAudi.format}, ${r.selectedAudi.capacity} seats)`],
+        ...r.selectedAudis.map((a) => [
+          `Audi ${a.audi}`,
+          `(${a.format}, ${a.capacity} seats): ${a.requiredTickets} tickets × ${formatINRForPdf(a.rate)}`,
+        ]),
         ['Event', r.eventDetail ? `${r.eventType} — ${r.eventDetail}` : r.eventType],
         ['Time slot', `${r.activeTimeSlot.label} (${r.activeTimeSlot.range})`],
         ['Request date', r.requestDate],
         ['Attendees', String(r.desiredAttendees)],
-        ['Tickets required', `${r.selectedAudi.requiredTickets} × ${formatINRForPdf(r.selectedAudi.rate)}`],
+        ['Tickets subtotal', formatINRForPdf(r.ticketSubtotal)],
         ['Food', r.activeCombo && r.activeCombo.id !== 'none'
           ? `${r.activeCombo.label} (${r.desiredAttendees} × ${formatINRForPdf(r.activeCombo.price)})`
           : 'None'],
@@ -1604,14 +1614,21 @@ export default function App() {
     const cinemasSummary = completePSCinemas
       .map((r, idx) => {
         const prefix = completePSCinemas.length > 1 ? idx + 1 + '. ' : '';
+        const audiLines = r.selectedAudis
+          .map(
+            (a) =>
+              '   Audi ' + a.audi + ' (' + a.format + ', ' + a.capacity + ' seats): ' +
+              a.requiredTickets + ' tickets x ' + formatINR(a.rate)
+          )
+          .join('\n');
         return (
           prefix + r.cinemaName + ' — Private Screening\n' +
-          '   Audi: ' + r.selectedAudi.audi + ' (' + r.selectedAudi.format + ', ' + r.selectedAudi.capacity + ' seats)\n' +
+          audiLines + '\n' +
           '   Event: ' + r.eventType + (r.eventDetail ? ' — ' + r.eventDetail : '') + '\n' +
           '   Date: ' + r.requestDate + '\n' +
           '   Time slot: ' + r.activeTimeSlot.label + ' (' + r.activeTimeSlot.range + ')\n' +
           '   Desired attendees: ' + r.desiredAttendees + '\n' +
-          '   Required tickets: ' + r.selectedAudi.requiredTickets + ' x ' + formatINR(r.selectedAudi.rate) + ' = ' + formatINR(r.ticketSubtotal) + '\n' +
+          '   Tickets subtotal: ' + formatINR(r.ticketSubtotal) + '\n' +
           (r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier
             ? '   Price adjustment: ' + formatSurgeNote(r.dateAdjustment) + '\n'
             : '') +
@@ -1663,14 +1680,17 @@ export default function App() {
         cinemas: completePSCinemas.map((r) => ({
           bookingType: 'Private Screening',
           cinema: r.cinemaName,
-          audiNumber: r.selectedAudi.audi,
-          audiFormat: r.selectedAudi.format,
-          audiCapacity: r.selectedAudi.capacity,
-          requiredTickets: r.selectedAudi.requiredTickets,
+          // Multiple audis can be combined for one cinema — join per-audi values
+          // with a comma rather than restructuring to one row per audi, so the
+          // Sheet keeps one row per cinema.
+          audiNumber: r.selectedAudis.map((a) => a.audi).join(', '),
+          audiFormat: r.selectedAudis.map((a) => a.format).join(', '),
+          audiCapacity: r.selectedAudis.map((a) => a.capacity).join(', '),
+          requiredTickets: r.selectedAudis.map((a) => a.requiredTickets).join(', '),
           desiredAttendees: r.desiredAttendees,
           timeSlot: r.activeTimeSlot.label,
           timeSlotRange: r.activeTimeSlot.range,
-          pricePerTicket: r.selectedAudi.rate,
+          pricePerTicket: r.selectedAudis[0] ? r.selectedAudis[0].rate : null,
           requestDate: r.requestDate,
           eventType: r.eventType,
           eventDetail: r.eventDetail,
@@ -1703,14 +1723,17 @@ export default function App() {
         cinemas: completePSCinemas.map((r) => ({
           bookingType: 'Private Screening',
           cinema: r.cinemaName,
-          audiNumber: r.selectedAudi.audi,
-          audiFormat: r.selectedAudi.format,
-          audiCapacity: r.selectedAudi.capacity,
-          requiredTickets: r.selectedAudi.requiredTickets,
+          // Multiple audis can be combined for one cinema — join per-audi values
+          // with a comma rather than restructuring to one row per audi, so the
+          // backend keeps one row per cinema (mirrors submitPSLeadToSheet above).
+          audiNumber: r.selectedAudis.map((a) => a.audi).join(', '),
+          audiFormat: r.selectedAudis.map((a) => a.format).join(', '),
+          audiCapacity: r.selectedAudis.map((a) => a.capacity).join(', '),
+          requiredTickets: r.selectedAudis.map((a) => a.requiredTickets).join(', '),
           desiredAttendees: r.desiredAttendees,
           timeSlot: r.activeTimeSlot.label,
           timeSlotRange: r.activeTimeSlot.range,
-          pricePerTicket: r.selectedAudi.rate,
+          pricePerTicket: r.selectedAudis[0] ? r.selectedAudis[0].rate : null,
           requestDate: r.requestDate,
           eventType: r.eventType,
           eventDetail: r.eventDetail,
@@ -2537,11 +2560,6 @@ export default function App() {
         }
         .pb-audi-card:hover { border-color: var(--gold); }
         .pb-audi-card.active { border-color: var(--red); background: #2a1c1c; }
-        .pb-audi-card.disabled {
-          cursor: not-allowed;
-          opacity: 0.5;
-        }
-        .pb-audi-card.disabled:hover { border-color: var(--line); }
         .pb-audi-card-head {
           display: flex;
           justify-content: space-between;
@@ -2577,7 +2595,6 @@ export default function App() {
           color: var(--gold);
           margin-top: 4px;
         }
-        .pb-audi-note-error { color: var(--red); }
         .pb-audi-subtotal {
           font-family: 'IBM Plex Mono', monospace;
           font-size: 14px;
@@ -2585,6 +2602,13 @@ export default function App() {
           color: var(--ink);
           margin-top: 6px;
         }
+        .pb-audi-combined-capacity {
+          font-size: 12px;
+          line-height: 1.4;
+          color: var(--ink-muted);
+          margin-top: 8px;
+        }
+        .pb-audi-combined-capacity.warning { color: var(--gold); }
 
         .pb-combo-list { display: flex; flex-direction: column; gap: 8px; }
         .pb-combo {
@@ -4341,29 +4365,23 @@ export default function App() {
                                   {r.audiOptions.map((a) => (
                                     <div
                                       key={a.audi}
-                                      className={
-                                        'pb-audi-card' +
-                                        (r.selectedAudiNumber === a.audi ? ' active' : '') +
-                                        (a.disabled ? ' disabled' : '')
-                                      }
+                                      className={'pb-audi-card' + (r.selectedAudiNumbers.includes(a.audi) ? ' active' : '')}
                                       onClick={() => {
-                                        if (!a.disabled) updatePSCinemaDetail(r.cinemaName, { selectedAudiNumber: a.audi });
+                                        const nextNumbers = r.selectedAudiNumbers.includes(a.audi)
+                                          ? r.selectedAudiNumbers.filter((n) => n !== a.audi)
+                                          : [...r.selectedAudiNumbers, a.audi];
+                                        updatePSCinemaDetail(r.cinemaName, { selectedAudiNumbers: nextNumbers });
                                       }}
                                     >
                                       <div className="pb-audi-card-head">
                                         <span className="pb-audi-name">Audi {a.audi} &middot; {a.format}</span>
-                                        {!a.disabled && r.desiredAttendees > 0 && a.audi === r.cheapestAudiNumber && (
+                                        {r.desiredAttendees > 0 && a.audi === r.cheapestAudiNumber && (
                                           <span className="pb-audi-badge">Cheapest</span>
                                         )}
                                       </div>
                                       <div className="pb-audi-capacity">{a.capacity} seats</div>
                                       <div className="pb-audi-rate">{formatINR(a.rate)}/ticket</div>
-                                      {a.disabled && (
-                                        <div className="pb-audi-note pb-audi-note-error">
-                                          Group of {r.desiredAttendees} won&apos;t fit — capacity is {a.capacity}.
-                                        </div>
-                                      )}
-                                      {!a.disabled && r.desiredAttendees > 0 && (
+                                      {r.desiredAttendees > 0 && (
                                         <>
                                           {a.flooredByMinimum ? (
                                             <div className="pb-audi-note">
@@ -4379,6 +4397,16 @@ export default function App() {
                                     </div>
                                   ))}
                                 </div>
+                                {r.desiredAttendees > 0 && (
+                                  <div
+                                    className={
+                                      'pb-audi-combined-capacity' +
+                                      (r.combinedCapacity < r.desiredAttendees ? ' warning' : '')
+                                    }
+                                  >
+                                    Combined capacity: {r.combinedCapacity} / {r.desiredAttendees} needed
+                                  </div>
+                                )}
                               </>
                             )}
                           </div>
@@ -4429,14 +4457,21 @@ export default function App() {
                           <span className="pb-stub-row-value">{r.cinemaName}</span>
                         </div>
                       )}
-                      <div className="pb-stub-row">
-                        <span className="pb-stub-row-label">Audi</span>
-                        <span className="pb-stub-row-value">
-                          {r.selectedAudi
-                            ? `Audi ${r.selectedAudi.audi} (${r.selectedAudi.format}, ${r.selectedAudi.capacity} seats)`
-                            : '—'}
-                        </span>
-                      </div>
+                      {r.selectedAudis.length > 0 ? (
+                        r.selectedAudis.map((a) => (
+                          <div className="pb-stub-row" key={a.audi}>
+                            <span className="pb-stub-row-label">Audi {a.audi}</span>
+                            <span className="pb-stub-row-value">
+                              ({a.format}, {a.capacity} seats): {a.requiredTickets} tickets × {formatINR(a.rate)}
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="pb-stub-row">
+                          <span className="pb-stub-row-label">Audi</span>
+                          <span className="pb-stub-row-value">—</span>
+                        </div>
+                      )}
                       <div className="pb-stub-row">
                         <span className="pb-stub-row-label">Event</span>
                         <span className="pb-stub-row-value">
@@ -4458,19 +4493,17 @@ export default function App() {
                         <span className="pb-stub-row-value">{r.desiredAttendees > 0 ? r.desiredAttendees : '—'}</span>
                       </div>
                       <div className="pb-stub-row">
-                        <span className="pb-stub-row-label">
-                          {r.selectedAudi
-                            ? `Tickets required (${r.selectedAudi.requiredTickets} × ${formatINR(r.selectedAudi.rate)})`
-                            : 'Tickets required'}
-                        </span>
+                        <span className="pb-stub-row-label">Tickets subtotal</span>
                         <span className="pb-stub-row-value">{r.ticketSubtotal ? formatINR(r.ticketSubtotal) : '—'}</span>
                       </div>
-                      {r.selectedAudi && r.selectedAudi.flooredByMinimum && (
-                        <div style={{ fontSize: 11, color: 'var(--red-dim)', padding: '0 0 6px', lineHeight: 1.4 }}>
-                          {r.desiredAttendees} attending — this audi requires a minimum of {r.selectedAudi.requiredTickets}{' '}
-                          tickets (90% of its {r.selectedAudi.capacity}-seat capacity).
-                        </div>
-                      )}
+                      {r.selectedAudis
+                        .filter((a) => a.flooredByMinimum)
+                        .map((a) => (
+                          <div key={a.audi} style={{ fontSize: 11, color: 'var(--red-dim)', padding: '0 0 6px', lineHeight: 1.4 }}>
+                            {r.desiredAttendees} attending — Audi {a.audi} requires a minimum of {a.requiredTickets}{' '}
+                            tickets (90% of its {a.capacity}-seat capacity).
+                          </div>
+                        ))}
                       {r.dateAdjustment && r.dateAdjustment.blocked && (
                         <div style={{ fontSize: 11, color: 'var(--red-dim)', fontWeight: 700, padding: '0 0 6px', lineHeight: 1.4 }}>
                           {r.dateAdjustment.label}

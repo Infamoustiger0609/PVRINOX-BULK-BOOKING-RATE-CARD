@@ -97,32 +97,66 @@ Staff-only third flow (`mode === 'employeeLogin'` / `'dashboard'`), backed
 by Supabase (Postgres) + a JWT session cookie — schema at
 `supabase/schema.sql` (run it once against the Supabase project by hand;
 there's no migration runner). Shared server-only helpers live in
-`api/_lib/` (`supabaseAdmin.js`, `auth.js`, `emailjs.js`) — these use the
-Supabase **service key**, so never import them from `src/App.jsx` or
-anything else that ships to the browser.
+`api/_lib/` (`supabaseAdmin.js`, `auth.js`) — these use the Supabase
+**service key**, so never import them from `src/App.jsx` or anything else
+that ships to the browser.
 
 - `api/auth/login.js` / `me.js` / `logout.js` — email+bcrypt login, sets an
   httpOnly `session` JWT cookie (`JWT_SECRET`, 7d expiry); `me` restores the
-  session on page reload (App.jsx calls it once on mount).
+  session on page reload (App.jsx calls it once on mount, and again every
+  time `mode` becomes `'dashboard'` to catch a cookie that expired mid-tab).
 - `api/leads/index.js` — `GET` (protected, staff dashboard) lists/filters/
   sorts leads; `POST` (public) is called by both customer flows'
   `submitLeadToBackend`/`submitPSLeadToBackend` (mirroring
   `submitLeadToSheet`/`submitPSLeadToSheet` — same payload shape, separate
   destination) so real submissions show up in the dashboard, not just the
   Sheet.
+
+### Proforma Invoice (real feature, not a placeholder)
+
+`performa_invoices.items` (jsonb) stores the **entire** PI document — not
+just line items despite the column name (no schema change was needed to
+add the richer fields; `grand_total` is duplicated out of `piData.total`
+purely so the dashboard can sort by it). The full shape (company/GST/PAN/
+CIN, ref/date/PINV No, party, `lineItems`, net value, GST, total, amount-
+in-words, payment terms, notes, bank details) is built by
+`buildPiDataFromLead()` (`App.jsx`, prefills line items from the lead's
+`cinemas` using `FOOD_COMBOS` to recover a per-unit food price — the lead
+record itself only stores the combined subtotal) and `PI_DEFAULTS`
+(company info / GST no. / notes / bank details — all edited in one place
+if these ever change).
+
+netValue → gstAmount (18%) → total → amountInWords cascade live off the
+line items, but each has its own "manual override" — typing into that
+field freezes it until its Reset button is clicked (`piNetValueOverride`
+etc. in `App.jsx`, `null` = follow the calculation, non-null = frozen).
+Downstream fields still cascade off an overridden upstream one (e.g.
+overriding netValue still recomputes GST/total from it) unless they're
+*also* individually overridden.
+
+`buildPIPdf()` (`App.jsx`) renders the actual A4 PDF client-side with
+jsPDF, embedding the stamp at `public/assests/Stamp_for_PI.png.png` (note
+the folder's existing typo — left as-is rather than renamed) via
+`doc.addImage`. It's async (the stamp is fetched and converted to a data
+URL) and returns the `jsPDF` doc without saving it — callers choose
+`doc.save(...)` (staff "Download PDF") or `doc.output('datauristring')`
+(handed to the send endpoint as an email attachment).
+
 - `api/leads/[id]/pi.js` — upserts the one-row-per-lead draft PI
-  (`performa_invoices`, unique on `lead_id`).
-- `api/leads/[id]/pi/send.js` — emails the PI via EmailJS's server-side
-  REST API (`EMAILJS_PRIVATE_KEY`, separate from the client-side
-  `EMAILJS_CONFIG` public key in App.jsx) and flips the PI to `status:
-  'sent'`.
+  (`performa_invoices`, unique on `lead_id`) with the full `piData` object
+  from the client; called when "Create PI" is clicked.
+- `api/leads/[id]/pi/send.js` — **uses Resend, not EmailJS** (`resend` npm
+  package, `RESEND_API_KEY`) — scoped to PI sending only, the customer
+  lead-notification emails (`sendLeadEmail`/`sendPSLeadEmail`) are
+  untouched and still go through EmailJS. Takes the client-generated PDF
+  as a base64 data URI, emails it as an attachment via
+  `resend.emails.send`, then upserts `performa_invoices` to `status:
+  'sent'`. `from` is still `onboarding@resend.dev` (Resend's sandbox
+  sender) — swap for a verified domain before this goes to real customers.
 - Env vars (set in Vercel, not committed): `SUPABASE_URL`,
-  `SUPABASE_SERVICE_KEY`, `JWT_SECRET`, `EMAILJS_PRIVATE_KEY`. API routes
-  won't run under plain `npm run dev` (Vite only) — need `vercel dev` or an
+  `SUPABASE_SERVICE_KEY`, `JWT_SECRET`, `RESEND_API_KEY`. API routes won't
+  run under plain `npm run dev` (Vite only) — need `vercel dev` or an
   actual deploy to exercise them.
-- `api/_lib/emailjs.js`'s `serviceId`/`publicKey` are placeholders like
-  `EMAILJS_CONFIG` in App.jsx — fill in real values (and a real
-  `piTemplateId` from a new EmailJS template) before PI sending works.
 
 ## My working conventions
 

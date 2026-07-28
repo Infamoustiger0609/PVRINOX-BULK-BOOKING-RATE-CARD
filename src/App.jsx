@@ -266,6 +266,410 @@ function buildQuotePdf({ bookingType, referenceId, cinemaSections, grandTotal })
   doc.save(`${referenceId}-quote.pdf`);
 }
 
+/* ---------------------------------------------------------------
+   Proforma Invoice (staff dashboard) — data prefill, Indian-numbering
+   words conversion, and jsPDF layout. See CLAUDE.md for the field list.
+   ------------------------------------------------------------- */
+
+const PI_STAMP_IMAGE_URL = '/assests/Stamp_for_PI.png.png';
+
+const PI_DEFAULTS = {
+  companyName: 'PVR INOX LIMITED',
+  companyAddress: 'Block A, 4th Floor, Building No. 9A, DLF Cyber City, Phase III, Gurugram, Haryana - 122002',
+  gstNo: '27AAACP4526D1ZQ',
+  panNo: 'AAACP4526D',
+  cinNo: 'L74899DL1995PLC067827',
+  gstNumberForInvoice: '27AAACE7796G1Z9',
+  paymentTerms: '100% Advance',
+  notes: [
+    'Please Issue only A/c Payee Cheque/DD in the favour of PVR INOX LIMITED. Please quote Invoice No. while payment is made.',
+    'In case of payment done thru NEFT/RTGS, please notify with detail at shailesh.dubey@pvrcinemas.com.',
+    'Amount mentioned above is an estimate only and is subject to change on the finalisation of the actual cost.',
+    'Any Discrepancy in this bill should be notified within 5 days of receipt, else acceptance shall be deemed.',
+    'In case of cheque is bounced Rs.500/- will be charged.',
+    'Interest @2% Per Month shall be charged after payment due date.',
+    'All Disputes subject to Delhi Jurisdiction only.',
+    'For any query regarding this bill please mail at salesaccounts@pvrcinemas.com',
+  ]
+    .map((line, idx) => `${idx + 1}. ${line}`)
+    .join('\n'),
+  bankDetails: {
+    accountNo: '09290330000102',
+    bankName: 'HDFC Bank Ltd.',
+    branch: 'DLF Cyber City Gurugram',
+    ifsc: 'HDFC0000929',
+    micrCode: '110240120',
+  },
+};
+
+// "July 2, 2026" — no leading zero on the day, matches the sample's date format.
+function formatPiDate(d) {
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+const PI_ONES = [
+  '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+  'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen',
+];
+const PI_TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+function piTwoDigitsToWords(n) {
+  if (n < 20) return PI_ONES[n];
+  const tens = Math.floor(n / 10);
+  const ones = n % 10;
+  return PI_TENS[tens] + (ones ? ' ' + PI_ONES[ones] : '');
+}
+
+function piThreeDigitsToWords(n) {
+  const hundreds = Math.floor(n / 100);
+  const rest = n % 100;
+  let words = '';
+  if (hundreds) words += PI_ONES[hundreds] + ' Hundred';
+  if (rest) words += (words ? ' ' : '') + piTwoDigitsToWords(rest);
+  return words;
+}
+
+// Indian numbering (crore/lakh/thousand, not the western "million/billion" grouping).
+function numberToIndianWords(amount) {
+  let n = Math.round(Math.abs(Number(amount) || 0));
+  if (n === 0) return 'Rupees Zero Only';
+
+  const crore = Math.floor(n / 10000000);
+  n %= 10000000;
+  const lakh = Math.floor(n / 100000);
+  n %= 100000;
+  const thousand = Math.floor(n / 1000);
+  n %= 1000;
+  const hundred = n;
+
+  const parts = [];
+  if (crore) parts.push(piThreeDigitsToWords(crore) + ' Crore');
+  if (lakh) parts.push(piTwoDigitsToWords(lakh) + ' Lakh');
+  if (thousand) parts.push(piTwoDigitsToWords(thousand) + ' Thousand');
+  if (hundred) parts.push(piThreeDigitsToWords(hundred));
+
+  return 'Rupees ' + parts.join(' ') + ' Only';
+}
+
+// Starting line items for the PI editor — one ticket row per cinema, plus a separate
+// food row when a paid combo was selected. Mirrors the pricing split documented in
+// CLAUDE.md (bulk food count = ticket count; PS food count = desired attendees, not
+// required tickets) using FOOD_COMBOS to recover a per-unit food price, since the
+// lead record itself only stores the combined line subtotal. This is a best-effort
+// starting point — every row is fully editable afterward.
+function buildPiLineItemsFromLead(lead) {
+  let nextId = 0;
+  const items = [];
+  (lead.cinemas || []).forEach((c) => {
+    const isPS = c.bookingType === 'Private Screening';
+    const ticketQty = Number(isPS ? c.requiredTickets : c.ticketCount) || 0;
+    const multiplier = Number(c.priceAdjustmentMultiplier) || 1;
+    const ticketRate = Math.round((Number(c.pricePerTicket) || 0) * multiplier);
+    items.push({
+      id: nextId++,
+      description: `${c.cinema} - Tickets (${isPS ? `Audi ${c.audiNumber}` : c.format})`,
+      quantity: ticketQty,
+      rate: ticketRate,
+      amount: ticketQty * ticketRate,
+    });
+
+    const combo = FOOD_COMBOS.find((f) => f.label === c.foodCombo);
+    if (combo && combo.price > 0) {
+      const foodQty = Number(isPS ? c.desiredAttendees : c.ticketCount) || 0;
+      items.push({
+        id: nextId++,
+        description: `${c.cinema} - Food (${combo.label})`,
+        quantity: foodQty,
+        rate: combo.price,
+        amount: foodQty * combo.price,
+      });
+    }
+  });
+  return items.length ? items : [{ id: 0, description: '', quantity: 1, rate: 0, amount: 0 }];
+}
+
+function buildPiDataFromLead(lead) {
+  return {
+    companyName: PI_DEFAULTS.companyName,
+    companyAddress: PI_DEFAULTS.companyAddress,
+    gstNo: PI_DEFAULTS.gstNo,
+    panNo: PI_DEFAULTS.panNo,
+    cinNo: PI_DEFAULTS.cinNo,
+    refNo: '',
+    date: formatPiDate(new Date()),
+    pinvNo: '',
+    partyName: lead.customerName || '',
+    partyAddress: '',
+    lineItems: buildPiLineItemsFromLead(lead),
+    gstNumberForInvoice: PI_DEFAULTS.gstNumberForInvoice,
+    paymentTerms: PI_DEFAULTS.paymentTerms,
+    notes: PI_DEFAULTS.notes,
+    bankDetails: { ...PI_DEFAULTS.bankDetails },
+  };
+}
+
+async function loadImageAsDataUrl(url) {
+  const res = await fetch(url);
+  const blob = await res.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+// Builds (but does not save/output) the A4 Proforma Invoice PDF. `piData` must carry
+// the fully-resolved numbers (netValue/gstAmount/total/amountInWords already settled
+// between calculated-vs-override in the caller) — no pricing math happens in here,
+// matching buildQuotePdf's convention above. Caller decides doc.save(...) for a
+// download or doc.output('datauristring') to attach it to the send-PI email.
+async function buildPIPdf(piData) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const marginX = 15;
+  const rightX = pageWidth - marginX;
+  const contentWidth = rightX - marginX;
+  let y = 16;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.setTextColor(20, 20, 20);
+  doc.text('PROFORMA INVOICE', pageWidth / 2, y, { align: 'center' });
+  y += 8;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12.5);
+  doc.text(piData.companyName, marginX, y);
+  y += 5;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(60, 60, 60);
+  const addrLines = doc.splitTextToSize(piData.companyAddress, contentWidth * 0.6);
+  doc.text(addrLines, marginX, y);
+  const addrBottomY = y + addrLines.length * 4.2;
+
+  let ry = 16 + 8;
+  doc.setFontSize(9);
+  doc.setTextColor(20, 20, 20);
+  [
+    ['GST No', piData.gstNo],
+    ['PAN No', piData.panNo],
+    ['CIN No', piData.cinNo],
+  ].forEach(([label, value]) => {
+    doc.text(`${label}: ${value}`, rightX, ry, { align: 'right' });
+    ry += 4.5;
+  });
+
+  y = Math.max(addrBottomY, ry) + 5;
+  doc.setDrawColor(180, 180, 180);
+  doc.line(marginX, y, rightX, y);
+  y += 7;
+
+  doc.setFontSize(9.5);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Ref No:', marginX, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(piData.refNo || '-', marginX + 18, y);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Date:', marginX + 75, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(piData.date || '-', marginX + 88, y);
+  doc.setFont('helvetica', 'bold');
+  doc.text('PINV No:', marginX + 130, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(piData.pinvNo || '-', rightX, y, { align: 'right' });
+  y += 8;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('Party Name:', marginX, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(piData.partyName || '-', marginX + 26, y);
+  y += 5;
+  doc.setFont('helvetica', 'bold');
+  doc.text('Address:', marginX, y);
+  doc.setFont('helvetica', 'normal');
+  const partyAddrLines = doc.splitTextToSize(piData.partyAddress || '-', contentWidth - 26);
+  doc.text(partyAddrLines, marginX + 26, y);
+  y += partyAddrLines.length * 4.5 + 5;
+
+  // Line items table
+  const colX = { sno: marginX, desc: marginX + 9, qty: marginX + 122, rate: marginX + 140, amount: rightX };
+  const descWidth = colX.qty - colX.desc - 3;
+
+  function drawTableHeaderRow() {
+    const h = 7;
+    doc.setFillColor(232, 232, 232);
+    doc.rect(marginX, y, contentWidth, h, 'F');
+    doc.setDrawColor(120, 120, 120);
+    doc.rect(marginX, y, contentWidth, h);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(20, 20, 20);
+    doc.text('#', colX.sno + 2, y + 4.8);
+    doc.text('Description', colX.desc, y + 4.8);
+    doc.text('Qty', colX.qty, y + 4.8);
+    doc.text('Rate', colX.rate, y + 4.8);
+    doc.text('Amount', colX.amount, y + 4.8, { align: 'right' });
+    y += h;
+  }
+
+  drawTableHeaderRow();
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  piData.lineItems.forEach((item, idx) => {
+    const descLines = doc.splitTextToSize(item.description || '', descWidth);
+    const rowH = Math.max(6.5, descLines.length * 4 + 2.5);
+    if (y + rowH > pageHeight - 20) {
+      doc.addPage();
+      y = 20;
+      drawTableHeaderRow();
+    }
+    doc.setDrawColor(190, 190, 190);
+    doc.rect(marginX, y, contentWidth, rowH);
+    doc.text(String(idx + 1), colX.sno + 2, y + 4.5);
+    doc.text(descLines, colX.desc, y + 4.5);
+    doc.text(String(item.quantity), colX.qty, y + 4.5);
+    doc.text(formatINRForPdf(item.rate), colX.rate, y + 4.5);
+    doc.text(formatINRForPdf(item.amount), colX.amount, y + 4.5, { align: 'right' });
+    y += rowH;
+  });
+  y += 7;
+
+  if (y > pageHeight - 60) {
+    doc.addPage();
+    y = 20;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('Net Value', colX.rate, y);
+  doc.text(formatINRForPdf(piData.netValue), colX.amount, y, { align: 'right' });
+  y += 5.5;
+  doc.setFont('helvetica', 'normal');
+  doc.text(`GST (${piData.gstNumberForInvoice}) @ 18%`, colX.rate - 20, y);
+  doc.text(formatINRForPdf(piData.gstAmount), colX.amount, y, { align: 'right' });
+  y += 4;
+  doc.setDrawColor(120, 120, 120);
+  doc.line(colX.rate - 20, y, rightX, y);
+  y += 5;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('Total', colX.rate - 20, y);
+  doc.text(formatINRForPdf(piData.total), colX.amount, y, { align: 'right' });
+  y += 8;
+
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(9);
+  const wordsLines = doc.splitTextToSize(`Amount in Words: ${piData.amountInWords}`, contentWidth);
+  doc.text(wordsLines, marginX, y);
+  y += wordsLines.length * 4.2 + 4;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('Payment Terms:', marginX, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(piData.paymentTerms || '-', marginX + 32, y);
+  y += 9;
+
+  // Yellow-highlighted disclaimer, matching the sample.
+  const disclaimerText =
+    'NOTE: THIS IS A PROFORMA INVOICE ONLY. THIS IS NOT A TAX INVOICE / BILL OF SUPPLY AND CANNOT BE USED FOR AVAILING INPUT TAX CREDIT.';
+  const disclaimerLines = doc.splitTextToSize(disclaimerText, contentWidth - 6);
+  const disclaimerHeight = disclaimerLines.length * 4.2 + 4;
+  if (y + disclaimerHeight > pageHeight - 20) {
+    doc.addPage();
+    y = 20;
+  }
+  doc.setFillColor(255, 240, 140);
+  doc.rect(marginX, y, contentWidth, disclaimerHeight, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(90, 70, 0);
+  doc.text(disclaimerLines, marginX + 3, y + 5);
+  doc.setTextColor(20, 20, 20);
+  y += disclaimerHeight + 8;
+
+  if (y > pageHeight - 55) {
+    doc.addPage();
+    y = 20;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('Notes:', marginX, y);
+  y += 5;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  String(piData.notes || '')
+    .split('\n')
+    .filter((line) => line.trim())
+    .forEach((line) => {
+      const lines = doc.splitTextToSize(line.trim(), contentWidth);
+      if (y + lines.length * 3.8 > pageHeight - 20) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.text(lines, marginX, y);
+      y += lines.length * 3.8 + 1;
+    });
+  y += 5;
+
+  if (y > pageHeight - 45) {
+    doc.addPage();
+    y = 20;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('Bank Details', marginX, y);
+  y += 5;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  const bd = piData.bankDetails || {};
+  [
+    ['Account No', bd.accountNo],
+    ['Bank Name', bd.bankName],
+    ['Branch', bd.branch],
+    ['RTGS/NEFT/IFSC', bd.ifsc],
+    ['MICR Code', bd.micrCode],
+  ].forEach(([label, value]) => {
+    doc.text(`${label}: ${value || '-'}`, marginX, y);
+    y += 4.3;
+  });
+
+  // Signature block, bottom-right of the last page — fixed position rather than
+  // flowing with the content above, matching the sample's placement.
+  const stampSize = 26;
+  let sigY = pageHeight - 45;
+  if (y > sigY - 6) {
+    doc.addPage();
+    sigY = pageHeight - 45;
+  }
+  const sigX = rightX - stampSize;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(20, 20, 20);
+  doc.text(`For ${piData.companyName}`, rightX, sigY - 4, { align: 'right' });
+  try {
+    const stampDataUrl = await loadImageAsDataUrl(PI_STAMP_IMAGE_URL);
+    doc.addImage(stampDataUrl, 'PNG', sigX, sigY, stampSize, stampSize);
+  } catch (err) {
+    console.error('Could not embed PI stamp image:', err);
+  }
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text('Authorised Signatory', rightX, sigY + stampSize + 5, { align: 'right' });
+
+  return doc;
+}
+
 export default function App() {
   const [mode, setMode] = useState(null); // null | 'bulkBooking' | 'privateScreening' | 'employeeLogin' | 'dashboard'
 
@@ -284,11 +688,51 @@ export default function App() {
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState(false);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
-  const [piLineItems, setPiLineItems] = useState(null); // null until "Create PI" is clicked
+  const [piData, setPiData] = useState(null); // null until "Create PI" is clicked — see buildPiDataFromLead
+  const [piNetValueOverride, setPiNetValueOverride] = useState(null);
+  const [piGstAmountOverride, setPiGstAmountOverride] = useState(null);
+  const [piTotalOverride, setPiTotalOverride] = useState(null);
+  const [piAmountInWordsOverride, setPiAmountInWordsOverride] = useState(null);
   const [piSaving, setPiSaving] = useState(false);
   const [piSending, setPiSending] = useState(false);
+  const [piGeneratingPdf, setPiGeneratingPdf] = useState(false);
   const [piError, setPiError] = useState('');
   const [piSent, setPiSent] = useState(false);
+
+  // netValue/gstAmount/total/amountInWords each cascade from the one before unless
+  // the employee has typed a manual override into that specific field — matching
+  // the PI spec's "editable as an override... until reset to calculated is clicked".
+  const piCalculatedNetValue = useMemo(() => {
+    if (!piData) return 0;
+    return piData.lineItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  }, [piData]);
+  const piNetValue = piNetValueOverride !== null ? Number(piNetValueOverride) || 0 : piCalculatedNetValue;
+
+  const piCalculatedGstAmount = useMemo(() => Math.round(piNetValue * 0.18), [piNetValue]);
+  const piGstAmount = piGstAmountOverride !== null ? Number(piGstAmountOverride) || 0 : piCalculatedGstAmount;
+
+  const piCalculatedTotal = useMemo(() => piNetValue + piGstAmount, [piNetValue, piGstAmount]);
+  const piTotal = piTotalOverride !== null ? Number(piTotalOverride) || 0 : piCalculatedTotal;
+
+  const piCalculatedAmountInWords = useMemo(() => numberToIndianWords(piTotal), [piTotal]);
+  const piAmountInWords = piAmountInWordsOverride !== null ? piAmountInWordsOverride : piCalculatedAmountInWords;
+
+  function resetPiEditor() {
+    setPiData(null);
+    setPiNetValueOverride(null);
+    setPiGstAmountOverride(null);
+    setPiTotalOverride(null);
+    setPiAmountInWordsOverride(null);
+    setPiError('');
+    setPiSent(false);
+  }
+
+  // Bundles the live form state with the currently-resolved (calculated-or-override)
+  // totals — this is the exact shape saved as a draft, rendered to PDF, and sent.
+  function getResolvedPiData() {
+    if (!piData) return null;
+    return { ...piData, netValue: piNetValue, gstAmount: piGstAmount, total: piTotal, amountInWords: piAmountInWords };
+  }
 
   // Restores a logged-in employee's session on page load (the JWT cookie
   // persists across reloads even though this component's state doesn't).
@@ -308,8 +752,7 @@ export default function App() {
     setIsEmployeeLoggedIn(false);
     setLoggedInEmployeeName('');
     setSelectedLeadId(null);
-    setPiLineItems(null);
-    setPiSent(false);
+    resetPiEditor();
     setEmployeeLoginError('Your session has expired — please log in again.');
     setMode('employeeLogin');
   }
@@ -368,8 +811,7 @@ export default function App() {
     setIsEmployeeLoggedIn(false);
     setLoggedInEmployeeName('');
     setSelectedLeadId(null);
-    setPiLineItems(null);
-    setPiSent(false);
+    resetPiEditor();
     setMode(null);
     try {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
@@ -415,38 +857,31 @@ export default function App() {
 
   function openLeadDetail(refId) {
     setSelectedLeadId(refId);
-    setPiLineItems(null);
-    setPiError('');
-    setPiSent(false);
+    resetPiEditor();
   }
 
   function closeLeadDetail() {
     setSelectedLeadId(null);
-    setPiLineItems(null);
-    setPiError('');
-    setPiSent(false);
+    resetPiEditor();
   }
 
   async function startPiEditor(lead) {
-    setPiSent(false);
-    setPiError('');
-    const items = lead.cinemas.map((c, idx) => ({
-      id: idx,
-      label:
-        c.cinema + (c.bookingType === 'Private Screening' ? ` — Audi ${c.audiNumber} (${c.audiFormat})` : ` (${c.format})`),
-      price: c.pricePerTicket,
-      qty: c.bookingType === 'Private Screening' ? c.requiredTickets : c.ticketCount,
-    }));
-    setPiLineItems(items);
+    resetPiEditor();
+    const initialPiData = buildPiDataFromLead(lead);
+    setPiData(initialPiData);
 
     setPiSaving(true);
     try {
-      const grandTotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+      const netValue = initialPiData.lineItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+      const gstAmount = Math.round(netValue * 0.18);
+      const total = netValue + gstAmount;
+      const resolved = { ...initialPiData, netValue, gstAmount, total, amountInWords: numberToIndianWords(total) };
+
       const res = await fetch(`/api/leads/${lead.id}/pi`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items, grandTotal }),
+        body: JSON.stringify({ piData: resolved }),
       });
       if (res.status === 401) return handleEmployeeSessionExpired();
       if (!res.ok) setPiError('Could not save the draft PI — you can still edit it, but try Send again in a moment.');
@@ -457,17 +892,61 @@ export default function App() {
     }
   }
 
-  function updatePiLineItem(id, field, value) {
-    setPiLineItems((items) => items.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  function updatePiField(field, value) {
+    setPiData((d) => ({ ...d, [field]: value }));
   }
 
-  const piGrandTotal = useMemo(() => {
-    if (!piLineItems) return 0;
-    return piLineItems.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
-  }, [piLineItems]);
+  function updatePiBankField(field, value) {
+    setPiData((d) => ({ ...d, bankDetails: { ...d.bankDetails, [field]: value } }));
+  }
+
+  function updatePiLineItem(id, field, value) {
+    setPiData((d) => ({
+      ...d,
+      lineItems: d.lineItems.map((item) => {
+        if (item.id !== id) return item;
+        const next = { ...item, [field]: value };
+        // Amount stays editable on its own, but a qty/rate edit always wins and
+        // recomputes it — that's what "keep the editable amount override per row"
+        // means in practice: type over amount for a one-off adjustment, or change
+        // qty/rate to recalculate it.
+        if (field === 'quantity' || field === 'rate') {
+          next.amount = (Number(next.quantity) || 0) * (Number(next.rate) || 0);
+        }
+        return next;
+      }),
+    }));
+  }
+
+  function addPiLineItem() {
+    setPiData((d) => {
+      const nextId = d.lineItems.length ? Math.max(...d.lineItems.map((item) => item.id)) + 1 : 0;
+      return { ...d, lineItems: [...d.lineItems, { id: nextId, description: '', quantity: 1, rate: 0, amount: 0 }] };
+    });
+  }
+
+  function removePiLineItem(id) {
+    setPiData((d) => ({ ...d, lineItems: d.lineItems.filter((item) => item.id !== id) }));
+  }
+
+  async function handleDownloadPiPdf() {
+    const resolved = getResolvedPiData();
+    if (!resolved || !selectedLead) return;
+    setPiGeneratingPdf(true);
+    try {
+      const doc = await buildPIPdf(resolved);
+      doc.save(`PI_${resolved.pinvNo || selectedLead.referenceId}.pdf`);
+    } catch (err) {
+      console.error(err);
+      setPiError('Could not generate the PDF.');
+    } finally {
+      setPiGeneratingPdf(false);
+    }
+  }
 
   async function handleSendPi() {
-    if (!selectedLead || !piLineItems) return;
+    const resolved = getResolvedPiData();
+    if (!selectedLead || !resolved) return;
     const customerEmail = selectedLead.email;
     if (!customerEmail || customerEmail === 'Not provided') {
       setPiError('No email on file for this customer — cannot send a PI.');
@@ -477,28 +956,21 @@ export default function App() {
     setPiError('');
     setPiSending(true);
     try {
-      // Sync the currently-edited line items as the draft before sending, so the
-      // saved PI always matches what was actually emailed.
-      const saveRes = await fetch(`/api/leads/${selectedLead.id}/pi`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: piLineItems, grandTotal: piGrandTotal }),
-      });
-      if (saveRes.status === 401) return handleEmployeeSessionExpired();
-      if (!saveRes.ok) throw new Error('Failed to save PI');
+      const doc = await buildPIPdf(resolved);
+      const pdfDataUri = doc.output('datauristring');
 
-      const sendRes = await fetch(`/api/leads/${selectedLead.id}/pi/send`, {
+      const res = await fetch(`/api/leads/${selectedLead.id}/pi/send`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: piLineItems, grandTotal: piGrandTotal, customerEmail }),
+        body: JSON.stringify({ piData: resolved, pdfDataUri, customerEmail }),
       });
-      if (sendRes.status === 401) return handleEmployeeSessionExpired();
-      if (!sendRes.ok) throw new Error('Failed to send PI');
+      if (res.status === 401) return handleEmployeeSessionExpired();
+      if (!res.ok) throw new Error('Failed to send PI');
 
       setPiSent(true);
-    } catch {
+    } catch (err) {
+      console.error(err);
       setPiError('Failed to send the PI — please try again.');
     } finally {
       setPiSending(false);
@@ -1597,33 +2069,125 @@ export default function App() {
 
         .pb-dash-detail { max-width: 480px; margin: 0 auto; }
 
-        .pb-pi-row-header {
-          display: grid;
-          grid-template-columns: 1fr 90px 70px 100px;
-          gap: 8px;
+        .pb-pi-form {
+          background: var(--stub);
+          color: var(--stub-ink);
+          border-radius: 14px;
+          padding: 22px;
+          margin-top: 16px;
+        }
+        .pb-pi-form input, .pb-pi-form textarea {
+          width: 100%;
+          background: #fff;
+          color: #1c1717;
+          border: 1px solid #cbbfa8;
+          border-radius: 8px;
+          padding: 8px 10px;
+          font-size: 13px;
+          font-family: 'Inter', sans-serif;
+          outline: none;
+        }
+        .pb-pi-form textarea { resize: vertical; line-height: 1.5; }
+        .pb-pi-form input:focus, .pb-pi-form textarea:focus { border-color: var(--gold); }
+        .pb-pi-section { margin-bottom: 20px; padding-bottom: 18px; border-bottom: 1px dashed #d8cdb9; }
+        .pb-pi-section:last-of-type { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        .pb-pi-section-title {
+          font-family: 'Bebas Neue', sans-serif;
+          font-size: 17px;
+          letter-spacing: 0.02em;
+          color: #1c1717;
+          margin: 0 0 12px;
+        }
+        .pb-pi-field { margin-bottom: 10px; }
+        .pb-pi-field:last-child { margin-bottom: 0; }
+        .pb-pi-field label {
+          display: block;
           font-size: 10.5px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          color: #6b6058;
+          margin-bottom: 4px;
+        }
+        .pb-pi-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .pb-pi-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+
+        .pb-pi-table-header, .pb-pi-table-row {
+          display: grid;
+          grid-template-columns: 1fr 70px 90px 100px 24px;
+          gap: 8px;
+          align-items: center;
+        }
+        .pb-pi-table-header {
+          font-size: 10px;
           text-transform: uppercase;
           letter-spacing: 0.05em;
           color: #6b6058;
           padding: 0 0 6px;
         }
-        .pb-pi-row {
+        .pb-pi-table-row { padding: 6px 0; border-bottom: 1px dotted #d8cdb9; }
+        .pb-pi-table-row:last-of-type { border-bottom: none; }
+        .pb-pi-row-remove {
+          background: transparent;
+          border: none;
+          color: #b23c3c;
+          font-size: 18px;
+          line-height: 1;
+          cursor: pointer;
+          padding: 0;
+        }
+        .pb-pi-row-remove:hover { color: var(--red); }
+        .pb-pi-add-row {
+          margin-top: 8px;
+          background: transparent;
+          border: 1px dashed #cbbfa8;
+          border-radius: 8px;
+          color: #6b6058;
+          font-size: 12.5px;
+          font-weight: 600;
+          padding: 8px 12px;
+          cursor: pointer;
+          width: 100%;
+        }
+        .pb-pi-add-row:hover { border-color: var(--gold); color: #1c1717; }
+
+        .pb-pi-total-row {
           display: grid;
-          grid-template-columns: 1fr 90px 70px 100px;
-          gap: 8px;
+          grid-template-columns: 1fr 140px auto;
+          gap: 10px;
           align-items: center;
-          padding: 8px 0;
-          border-bottom: 1px dotted #d8cdb9;
-        }
-        .pb-pi-row:last-child { border-bottom: none; }
-        .pb-pi-row input.pb-input { padding: 8px 10px; font-size: 13px; }
-        .pb-pi-row-subtotal {
-          font-family: 'IBM Plex Mono', monospace;
-          font-weight: 700;
-          color: var(--stub-ink);
-          text-align: right;
+          margin-bottom: 10px;
           font-size: 13px;
+          font-weight: 600;
         }
+        .pb-pi-total-row-grand { font-size: 15px; }
+        .pb-pi-total-row-grand input { font-weight: 700; color: var(--red-dim); }
+        .pb-pi-reset-btn {
+          background: transparent;
+          border: none;
+          color: var(--red-dim);
+          font-size: 11.5px;
+          font-weight: 600;
+          text-decoration: underline;
+          cursor: pointer;
+          padding: 0;
+          white-space: nowrap;
+        }
+        .pb-pi-words-row { display: flex; gap: 10px; align-items: flex-start; }
+        .pb-pi-words-row textarea { flex: 1; }
+
+        .pb-pi-notes { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; line-height: 1.6; }
+
+        .pb-pi-signature-note {
+          font-size: 11.5px;
+          color: #6b6058;
+          text-align: right;
+          margin: 4px 0 14px;
+        }
+        .pb-pi-signature-note span { display: block; font-size: 10.5px; font-style: italic; }
+
+        .pb-pi-actions { display: flex; gap: 10px; }
+        .pb-pi-actions .pb-btn { flex: 1; }
 
         @media (max-width: 640px) {
           .pb-dash-row {
@@ -1635,7 +2199,10 @@ export default function App() {
           .pb-dash-row-name { grid-area: name; }
           .pb-dash-row-date { grid-area: date; }
           .pb-dash-row-total { grid-area: total; }
-          .pb-pi-row-header, .pb-pi-row { grid-template-columns: 1fr 70px 55px 80px; }
+          .pb-pi-grid-2, .pb-pi-grid-3 { grid-template-columns: 1fr; }
+          .pb-pi-table-header, .pb-pi-table-row { grid-template-columns: 1fr 50px 65px 75px 20px; font-size: 11px; }
+          .pb-pi-total-row { grid-template-columns: 1fr 110px auto; }
+          .pb-pi-actions { flex-direction: column; }
         }
 
         .pb-modal-backdrop {
@@ -2568,7 +3135,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {!piLineItems && (
+                {!piData && (
                   <button
                     type="button"
                     className="pb-btn pb-btn-primary"
@@ -2580,61 +3147,257 @@ export default function App() {
                   </button>
                 )}
 
-                {piLineItems && (
-                  <div className="pb-stub" style={{ marginTop: 16 }}>
-                    <div className="pb-stub-top">
-                      <div className="pb-stub-admit" style={{ fontSize: 22 }}>Proforma Invoice</div>
-                      <div className="pb-stub-sub">{selectedLead.referenceId}</div>
-                    </div>
-                    <div className="pb-stub-divider" />
-                    <div className="pb-stub-rows">
-                      <div className="pb-pi-row-header">
-                        <span>Line item</span>
-                        <span>Price</span>
-                        <span>Qty</span>
-                        <span>Subtotal</span>
+                {piData && (
+                  <div className="pb-pi-form">
+                    <div className="pb-pi-section">
+                      <div className="pb-pi-section-title">Company Details</div>
+                      <div className="pb-pi-field">
+                        <label>Company Name</label>
+                        <input value={piData.companyName} onChange={(e) => updatePiField('companyName', e.target.value)} />
                       </div>
-                      {piLineItems.map((item) => (
-                        <div key={item.id} className="pb-pi-row">
+                      <div className="pb-pi-field">
+                        <label>Company Address</label>
+                        <textarea
+                          rows={2}
+                          value={piData.companyAddress}
+                          onChange={(e) => updatePiField('companyAddress', e.target.value)}
+                        />
+                      </div>
+                      <div className="pb-pi-grid-3">
+                        <div className="pb-pi-field">
+                          <label>GST No</label>
+                          <input value={piData.gstNo} onChange={(e) => updatePiField('gstNo', e.target.value)} />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>PAN No</label>
+                          <input value={piData.panNo} onChange={(e) => updatePiField('panNo', e.target.value)} />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>CIN No</label>
+                          <input value={piData.cinNo} onChange={(e) => updatePiField('cinNo', e.target.value)} />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pb-pi-section">
+                      <div className="pb-pi-section-title">Invoice Details</div>
+                      <div className="pb-pi-grid-3">
+                        <div className="pb-pi-field">
+                          <label>Ref No</label>
+                          <input value={piData.refNo} onChange={(e) => updatePiField('refNo', e.target.value)} placeholder="—" />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>Date</label>
+                          <input value={piData.date} onChange={(e) => updatePiField('date', e.target.value)} />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>PINV No</label>
+                          <input value={piData.pinvNo} onChange={(e) => updatePiField('pinvNo', e.target.value)} placeholder="—" />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pb-pi-section">
+                      <div className="pb-pi-section-title">Party Details</div>
+                      <div className="pb-pi-field">
+                        <label>Party Name</label>
+                        <input value={piData.partyName} onChange={(e) => updatePiField('partyName', e.target.value)} />
+                      </div>
+                      <div className="pb-pi-field">
+                        <label>Party Address</label>
+                        <textarea
+                          rows={2}
+                          value={piData.partyAddress}
+                          onChange={(e) => updatePiField('partyAddress', e.target.value)}
+                          placeholder="Billing address"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pb-pi-section">
+                      <div className="pb-pi-section-title">Line Items</div>
+                      <div className="pb-pi-table-header">
+                        <span>Description</span>
+                        <span>Qty</span>
+                        <span>Rate</span>
+                        <span>Amount</span>
+                        <span />
+                      </div>
+                      {piData.lineItems.map((item) => (
+                        <div key={item.id} className="pb-pi-table-row">
                           <input
-                            className="pb-input"
-                            style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
-                            value={item.label}
-                            onChange={(e) => updatePiLineItem(item.id, 'label', e.target.value)}
+                            value={item.description}
+                            onChange={(e) => updatePiLineItem(item.id, 'description', e.target.value)}
+                            placeholder="Description"
                           />
                           <input
                             type="number"
-                            className="pb-input"
-                            style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
-                            value={item.price}
-                            onChange={(e) => updatePiLineItem(item.id, 'price', e.target.value)}
+                            value={item.quantity}
+                            onChange={(e) => updatePiLineItem(item.id, 'quantity', e.target.value)}
                           />
                           <input
                             type="number"
-                            className="pb-input"
-                            style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
-                            value={item.qty}
-                            onChange={(e) => updatePiLineItem(item.id, 'qty', e.target.value)}
+                            value={item.rate}
+                            onChange={(e) => updatePiLineItem(item.id, 'rate', e.target.value)}
                           />
-                          <span className="pb-pi-row-subtotal">
-                            {formatINR((Number(item.price) || 0) * (Number(item.qty) || 0))}
-                          </span>
+                          <input
+                            type="number"
+                            value={item.amount}
+                            onChange={(e) => updatePiLineItem(item.id, 'amount', e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            className="pb-pi-row-remove"
+                            onClick={() => removePiLineItem(item.id)}
+                            aria-label="Remove line item"
+                          >
+                            &times;
+                          </button>
                         </div>
                       ))}
-                    </div>
-                    <div className="pb-stub-total">
-                      <span className="pb-stub-total-label">PI Grand total</span>
-                      <span className="pb-stub-total-value">{formatINR(piGrandTotal)}</span>
+                      <button type="button" className="pb-pi-add-row" onClick={addPiLineItem}>
+                        + Add line item
+                      </button>
                     </div>
 
-                    {piError && (
-                      <div className="pb-error" style={{ margin: '0 22px 14px' }}>
-                        {piError}
+                    <div className="pb-pi-section">
+                      <div className="pb-pi-section-title">Totals</div>
+                      <div className="pb-pi-total-row">
+                        <span>Net Value</span>
+                        <input
+                          type="number"
+                          value={piNetValueOverride !== null ? piNetValueOverride : piNetValue}
+                          onChange={(e) => setPiNetValueOverride(e.target.value)}
+                        />
+                        {piNetValueOverride !== null && (
+                          <button type="button" className="pb-pi-reset-btn" onClick={() => setPiNetValueOverride(null)}>
+                            Reset
+                          </button>
+                        )}
                       </div>
-                    )}
+                      <div className="pb-pi-field">
+                        <label>GST Number (for this invoice)</label>
+                        <input
+                          value={piData.gstNumberForInvoice}
+                          onChange={(e) => updatePiField('gstNumberForInvoice', e.target.value)}
+                        />
+                      </div>
+                      <div className="pb-pi-total-row">
+                        <span>GST Amount (18%)</span>
+                        <input
+                          type="number"
+                          value={piGstAmountOverride !== null ? piGstAmountOverride : piGstAmount}
+                          onChange={(e) => setPiGstAmountOverride(e.target.value)}
+                        />
+                        {piGstAmountOverride !== null && (
+                          <button type="button" className="pb-pi-reset-btn" onClick={() => setPiGstAmountOverride(null)}>
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                      <div className="pb-pi-total-row pb-pi-total-row-grand">
+                        <span>Total</span>
+                        <input
+                          type="number"
+                          value={piTotalOverride !== null ? piTotalOverride : piTotal}
+                          onChange={(e) => setPiTotalOverride(e.target.value)}
+                        />
+                        {piTotalOverride !== null && (
+                          <button type="button" className="pb-pi-reset-btn" onClick={() => setPiTotalOverride(null)}>
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                      <div className="pb-pi-field">
+                        <label>Amount in Words</label>
+                        <div className="pb-pi-words-row">
+                          <textarea
+                            rows={2}
+                            value={piAmountInWordsOverride !== null ? piAmountInWordsOverride : piAmountInWords}
+                            onChange={(e) => setPiAmountInWordsOverride(e.target.value)}
+                          />
+                          {piAmountInWordsOverride !== null && (
+                            <button
+                              type="button"
+                              className="pb-pi-reset-btn"
+                              onClick={() => setPiAmountInWordsOverride(null)}
+                            >
+                              Reset
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="pb-pi-field">
+                        <label>Payment Terms</label>
+                        <input value={piData.paymentTerms} onChange={(e) => updatePiField('paymentTerms', e.target.value)} />
+                      </div>
+                    </div>
+
+                    <div className="pb-pi-section">
+                      <div className="pb-pi-section-title">Notes</div>
+                      <textarea
+                        className="pb-pi-notes"
+                        rows={8}
+                        value={piData.notes}
+                        onChange={(e) => updatePiField('notes', e.target.value)}
+                      />
+                    </div>
+
+                    <div className="pb-pi-section">
+                      <div className="pb-pi-section-title">Bank Details</div>
+                      <div className="pb-pi-grid-2">
+                        <div className="pb-pi-field">
+                          <label>Account No</label>
+                          <input
+                            value={piData.bankDetails.accountNo}
+                            onChange={(e) => updatePiBankField('accountNo', e.target.value)}
+                          />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>Bank Name</label>
+                          <input
+                            value={piData.bankDetails.bankName}
+                            onChange={(e) => updatePiBankField('bankName', e.target.value)}
+                          />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>Branch</label>
+                          <input
+                            value={piData.bankDetails.branch}
+                            onChange={(e) => updatePiBankField('branch', e.target.value)}
+                          />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>RTGS/NEFT/IFSC</label>
+                          <input value={piData.bankDetails.ifsc} onChange={(e) => updatePiBankField('ifsc', e.target.value)} />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>MICR Code</label>
+                          <input
+                            value={piData.bankDetails.micrCode}
+                            onChange={(e) => updatePiBankField('micrCode', e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pb-pi-signature-note">
+                      For {piData.companyName} — Authorised Signatory
+                      <span> (stamp is added automatically in the generated PDF)</span>
+                    </div>
+
+                    {piError && <div className="pb-error">{piError}</div>}
 
                     {!piSent ? (
-                      <div className="pb-actions" style={{ padding: '0 22px 22px' }}>
+                      <div className="pb-pi-actions">
+                        <button
+                          type="button"
+                          className="pb-btn pb-btn-secondary"
+                          onClick={handleDownloadPiPdf}
+                          disabled={piGeneratingPdf}
+                        >
+                          {piGeneratingPdf ? 'Generating...' : 'Download PDF'}
+                        </button>
                         <button type="button" className="pb-btn pb-btn-primary" onClick={handleSendPi} disabled={piSending}>
                           {piSending ? 'Sending...' : 'Send PI'}
                         </button>
@@ -2642,9 +3405,7 @@ export default function App() {
                     ) : (
                       <div className="pb-result">
                         <div className="pb-result-title">PI sent</div>
-                        <p className="pb-result-text">
-                          The proforma invoice was emailed to {selectedLead.email}.
-                        </p>
+                        <p className="pb-result-text">The proforma invoice was emailed to {selectedLead.email}.</p>
                       </div>
                     )}
                   </div>

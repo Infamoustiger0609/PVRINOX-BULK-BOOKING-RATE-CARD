@@ -3,7 +3,10 @@ import { requireSession } from '../../_lib/auth.js';
 
 // POST /api/leads/:id/pi — create or update the (single) draft PI for a lead.
 // One row per lead_id: re-editing an existing PI upserts it back to 'draft'
-// rather than creating a second row.
+// rather than creating a second row. `piData` is the full PI document (company/
+// party/line-items/totals/notes/bank details, see buildPiDataFromLead in
+// src/App.jsx) — stored whole in the `items` jsonb column, no schema change.
+// `grand_total` is duplicated out of piData.total for dashboard sorting.
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -14,9 +17,9 @@ export default async function handler(req, res) {
   if (!session) return;
 
   const { id } = req.query;
-  const { items, grandTotal } = req.body || {};
-  if (!Array.isArray(items) || grandTotal == null) {
-    return res.status(400).json({ error: 'Missing items or grandTotal' });
+  const { piData } = req.body || {};
+  if (!piData || typeof piData !== 'object' || !Array.isArray(piData.lineItems)) {
+    return res.status(400).json({ error: 'Missing piData' });
   }
 
   const { data, error } = await supabaseAdmin
@@ -24,8 +27,8 @@ export default async function handler(req, res) {
     .upsert(
       {
         lead_id: id,
-        items,
-        grand_total: grandTotal,
+        items: piData,
+        grand_total: Number(piData.total) || 0,
         status: 'draft',
         created_by: session.id,
       },

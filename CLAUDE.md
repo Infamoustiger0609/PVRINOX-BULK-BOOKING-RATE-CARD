@@ -91,6 +91,39 @@ and hands it to one generic renderer. jsPDF's built-in fonts can't render
 "₹" (renders as a garbled glyph) — use `formatINRForPdf()` ("Rs. X") inside
 PDF-only code paths, never the on-screen `formatINR()`.
 
+## Employee Dashboard backend (`/api`, Vercel serverless functions)
+
+Staff-only third flow (`mode === 'employeeLogin'` / `'dashboard'`), backed
+by Supabase (Postgres) + a JWT session cookie — schema at
+`supabase/schema.sql` (run it once against the Supabase project by hand;
+there's no migration runner). Shared server-only helpers live in
+`api/_lib/` (`supabaseAdmin.js`, `auth.js`, `emailjs.js`) — these use the
+Supabase **service key**, so never import them from `src/App.jsx` or
+anything else that ships to the browser.
+
+- `api/auth/login.js` / `me.js` / `logout.js` — email+bcrypt login, sets an
+  httpOnly `session` JWT cookie (`JWT_SECRET`, 7d expiry); `me` restores the
+  session on page reload (App.jsx calls it once on mount).
+- `api/leads/index.js` — `GET` (protected, staff dashboard) lists/filters/
+  sorts leads; `POST` (public) is called by both customer flows'
+  `submitLeadToBackend`/`submitPSLeadToBackend` (mirroring
+  `submitLeadToSheet`/`submitPSLeadToSheet` — same payload shape, separate
+  destination) so real submissions show up in the dashboard, not just the
+  Sheet.
+- `api/leads/[id]/pi.js` — upserts the one-row-per-lead draft PI
+  (`performa_invoices`, unique on `lead_id`).
+- `api/leads/[id]/pi/send.js` — emails the PI via EmailJS's server-side
+  REST API (`EMAILJS_PRIVATE_KEY`, separate from the client-side
+  `EMAILJS_CONFIG` public key in App.jsx) and flips the PI to `status:
+  'sent'`.
+- Env vars (set in Vercel, not committed): `SUPABASE_URL`,
+  `SUPABASE_SERVICE_KEY`, `JWT_SECRET`, `EMAILJS_PRIVATE_KEY`. API routes
+  won't run under plain `npm run dev` (Vite only) — need `vercel dev` or an
+  actual deploy to exercise them.
+- `api/_lib/emailjs.js`'s `serviceId`/`publicKey` are placeholders like
+  `EMAILJS_CONFIG` in App.jsx — fill in real values (and a real
+  `piTemplateId` from a new EmailJS template) before PI sending works.
+
 ## My working conventions
 
 - Prefer **precise, scoped changes** over broad refactors — match existing

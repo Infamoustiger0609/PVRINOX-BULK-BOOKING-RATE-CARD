@@ -267,7 +267,243 @@ function buildQuotePdf({ bookingType, referenceId, cinemaSections, grandTotal })
 }
 
 export default function App() {
-  const [mode, setMode] = useState(null); // null | 'bulkBooking' | 'privateScreening'
+  const [mode, setMode] = useState(null); // null | 'bulkBooking' | 'privateScreening' | 'employeeLogin' | 'dashboard'
+
+  // ---- Employee Dashboard: backed by /api/auth/* + /api/leads/* (Supabase + JWT cookie) ----
+  const [isEmployeeLoggedIn, setIsEmployeeLoggedIn] = useState(false);
+  const [loggedInEmployeeName, setLoggedInEmployeeName] = useState('');
+  const [employeeLoginEmail, setEmployeeLoginEmail] = useState('');
+  const [employeeLoginPassword, setEmployeeLoginPassword] = useState('');
+  const [employeeLoginError, setEmployeeLoginError] = useState('');
+  const [employeeLoginSubmitting, setEmployeeLoginSubmitting] = useState(false);
+
+  const [dashboardDateFrom, setDashboardDateFrom] = useState('');
+  const [dashboardDateTo, setDashboardDateTo] = useState('');
+  const [dashboardSort, setDashboardSort] = useState('recent'); // 'recent' | 'value'
+  const [dashboardLeads, setDashboardLeads] = useState([]);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [dashboardError, setDashboardError] = useState(false);
+  const [selectedLeadId, setSelectedLeadId] = useState(null);
+  const [piLineItems, setPiLineItems] = useState(null); // null until "Create PI" is clicked
+  const [piSaving, setPiSaving] = useState(false);
+  const [piSending, setPiSending] = useState(false);
+  const [piError, setPiError] = useState('');
+  const [piSent, setPiSent] = useState(false);
+
+  // Restores a logged-in employee's session on page load (the JWT cookie
+  // persists across reloads even though this component's state doesn't).
+  useEffect(() => {
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) {
+          setIsEmployeeLoggedIn(true);
+          setLoggedInEmployeeName(data.name);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  function handleEmployeeSessionExpired() {
+    setIsEmployeeLoggedIn(false);
+    setLoggedInEmployeeName('');
+    setSelectedLeadId(null);
+    setPiLineItems(null);
+    setPiSent(false);
+    setEmployeeLoginError('Your session has expired — please log in again.');
+    setMode('employeeLogin');
+  }
+
+  // Re-confirms the session every time the dashboard is entered (not just once at
+  // page load) — covers direct navigation to 'dashboard' and a cookie that expired
+  // while the tab sat open. Bounces to the login screen on a 401.
+  useEffect(() => {
+    if (mode !== 'dashboard') return;
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then((res) => {
+        if (res.status === 401) {
+          handleEmployeeSessionExpired();
+          return null;
+        }
+        return res.ok ? res.json() : null;
+      })
+      .then((data) => {
+        if (data) {
+          setIsEmployeeLoggedIn(true);
+          setLoggedInEmployeeName(data.name);
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  async function handleEmployeeLogin() {
+    setEmployeeLoginError('');
+    setEmployeeLoginSubmitting(true);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: employeeLoginEmail.trim(), password: employeeLoginPassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setEmployeeLoginError(data.error || 'Something went wrong. Please try again.');
+        return;
+      }
+      setIsEmployeeLoggedIn(true);
+      setLoggedInEmployeeName(data.name);
+      setEmployeeLoginEmail('');
+      setEmployeeLoginPassword('');
+      setMode('dashboard');
+    } catch {
+      setEmployeeLoginError('Could not reach the server. Please try again.');
+    } finally {
+      setEmployeeLoginSubmitting(false);
+    }
+  }
+
+  async function handleEmployeeLogout() {
+    setIsEmployeeLoggedIn(false);
+    setLoggedInEmployeeName('');
+    setSelectedLeadId(null);
+    setPiLineItems(null);
+    setPiSent(false);
+    setMode(null);
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  function fetchDashboardLeads() {
+    setDashboardLoading(true);
+    setDashboardError(false);
+    const params = new URLSearchParams();
+    if (dashboardDateFrom) params.set('from', dashboardDateFrom);
+    if (dashboardDateTo) params.set('to', dashboardDateTo);
+    params.set('sort', dashboardSort);
+
+    fetch(`/api/leads?${params.toString()}`, { credentials: 'include' })
+      .then((res) => {
+        if (res.status === 401) {
+          handleEmployeeSessionExpired();
+          return null;
+        }
+        if (!res.ok) throw new Error('Failed to load leads');
+        return res.json();
+      })
+      .then((data) => {
+        if (data) setDashboardLeads(data);
+      })
+      .catch(() => setDashboardError(true))
+      .finally(() => setDashboardLoading(false));
+  }
+
+  useEffect(() => {
+    if (mode !== 'dashboard' || !isEmployeeLoggedIn) return;
+    fetchDashboardLeads();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, isEmployeeLoggedIn, dashboardDateFrom, dashboardDateTo, dashboardSort]);
+
+  const selectedLead = useMemo(
+    () => dashboardLeads.find((lead) => lead.referenceId === selectedLeadId) || null,
+    [dashboardLeads, selectedLeadId]
+  );
+
+  function openLeadDetail(refId) {
+    setSelectedLeadId(refId);
+    setPiLineItems(null);
+    setPiError('');
+    setPiSent(false);
+  }
+
+  function closeLeadDetail() {
+    setSelectedLeadId(null);
+    setPiLineItems(null);
+    setPiError('');
+    setPiSent(false);
+  }
+
+  async function startPiEditor(lead) {
+    setPiSent(false);
+    setPiError('');
+    const items = lead.cinemas.map((c, idx) => ({
+      id: idx,
+      label:
+        c.cinema + (c.bookingType === 'Private Screening' ? ` — Audi ${c.audiNumber} (${c.audiFormat})` : ` (${c.format})`),
+      price: c.pricePerTicket,
+      qty: c.bookingType === 'Private Screening' ? c.requiredTickets : c.ticketCount,
+    }));
+    setPiLineItems(items);
+
+    setPiSaving(true);
+    try {
+      const grandTotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+      const res = await fetch(`/api/leads/${lead.id}/pi`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items, grandTotal }),
+      });
+      if (res.status === 401) return handleEmployeeSessionExpired();
+      if (!res.ok) setPiError('Could not save the draft PI — you can still edit it, but try Send again in a moment.');
+    } catch {
+      setPiError('Could not save the draft PI — you can still edit it, but try Send again in a moment.');
+    } finally {
+      setPiSaving(false);
+    }
+  }
+
+  function updatePiLineItem(id, field, value) {
+    setPiLineItems((items) => items.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  }
+
+  const piGrandTotal = useMemo(() => {
+    if (!piLineItems) return 0;
+    return piLineItems.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 0), 0);
+  }, [piLineItems]);
+
+  async function handleSendPi() {
+    if (!selectedLead || !piLineItems) return;
+    const customerEmail = selectedLead.email;
+    if (!customerEmail || customerEmail === 'Not provided') {
+      setPiError('No email on file for this customer — cannot send a PI.');
+      return;
+    }
+
+    setPiError('');
+    setPiSending(true);
+    try {
+      // Sync the currently-edited line items as the draft before sending, so the
+      // saved PI always matches what was actually emailed.
+      const saveRes = await fetch(`/api/leads/${selectedLead.id}/pi`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: piLineItems, grandTotal: piGrandTotal }),
+      });
+      if (saveRes.status === 401) return handleEmployeeSessionExpired();
+      if (!saveRes.ok) throw new Error('Failed to save PI');
+
+      const sendRes = await fetch(`/api/leads/${selectedLead.id}/pi/send`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: piLineItems, grandTotal: piGrandTotal, customerEmail }),
+      });
+      if (sendRes.status === 401) return handleEmployeeSessionExpired();
+      if (!sendRes.ok) throw new Error('Failed to send PI');
+
+      setPiSent(true);
+    } catch {
+      setPiError('Failed to send the PI — please try again.');
+    } finally {
+      setPiSending(false);
+    }
+  }
 
   const [referenceId, setReferenceId] = useState(generateReferenceId);
 
@@ -681,7 +917,7 @@ export default function App() {
 
     setPSStatus('sending');
     try {
-      await Promise.all([sendPSLeadEmail(newReferenceId), submitPSLeadToSheet(newReferenceId)]);
+      await Promise.all([sendPSLeadEmail(newReferenceId), submitPSLeadToSheet(newReferenceId), submitPSLeadToBackend(newReferenceId)]);
     } catch (err) {
       // The customer should never see backend plumbing trouble.
       // If leads stop arriving, check EMAILJS_CONFIG, APPS_SCRIPT_URL and the browser console.
@@ -845,6 +1081,41 @@ export default function App() {
     });
   }
 
+  // Feeds the same submission into the employee dashboard's leads table
+  // (api/leads/index.js POST), alongside the Sheet log above — same shape,
+  // separate destination. Swallow failures the same way submitLeadToSheet's
+  // caller already does: the customer should never see backend plumbing trouble.
+  async function submitLeadToBackend(refId) {
+    await fetch('/api/leads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        referenceId: refId,
+        bookingType: 'Bulk Booking',
+        customerName: name,
+        phone,
+        email: email || 'Not provided',
+        cinemas: completeCinemas.map((r) => ({
+          bookingType: 'Bulk Booking',
+          cinema: r.cinemaName,
+          format: r.format,
+          timeSlot: r.activeTimeSlot.label,
+          timeSlotRange: r.activeTimeSlot.range,
+          pricePerTicket: r.activePrice,
+          ticketCount: r.ticketCount,
+          requestDate: r.requestDate,
+          foodCombo: r.activeCombo ? r.activeCombo.label : 'None',
+          subtotal: r.lineTotal,
+          priceAdjustmentReason:
+            r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier ? r.dateAdjustment.label : '',
+          priceAdjustmentMultiplier:
+            r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier ? r.dateAdjustment.multiplier : 1,
+        })),
+        grandTotal,
+      }),
+    });
+  }
+
   async function sendPSLeadEmail(refId) {
     const cinemasSummary = completePSCinemas
       .map((r, idx) => {
@@ -931,6 +1202,46 @@ export default function App() {
     });
   }
 
+  // Feeds the same submission into the employee dashboard's leads table
+  // (api/leads/index.js POST), alongside the Sheet log above — same shape,
+  // separate destination. Swallow failures the same way submitPSLeadToSheet's
+  // caller already does: the customer should never see backend plumbing trouble.
+  async function submitPSLeadToBackend(refId) {
+    await fetch('/api/leads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        referenceId: refId,
+        bookingType: 'Private Screening',
+        customerName: psName,
+        phone: psPhone,
+        email: psEmail || 'Not provided',
+        cinemas: completePSCinemas.map((r) => ({
+          bookingType: 'Private Screening',
+          cinema: r.cinemaName,
+          audiNumber: r.selectedAudi.audi,
+          audiFormat: r.selectedAudi.format,
+          audiCapacity: r.selectedAudi.capacity,
+          requiredTickets: r.selectedAudi.requiredTickets,
+          desiredAttendees: r.desiredAttendees,
+          timeSlot: r.activeTimeSlot.label,
+          timeSlotRange: r.activeTimeSlot.range,
+          pricePerTicket: r.selectedAudi.rate,
+          requestDate: r.requestDate,
+          eventType: r.eventType,
+          eventDetail: r.eventDetail,
+          foodCombo: r.activeCombo ? r.activeCombo.label : 'None',
+          subtotal: r.lineTotal,
+          priceAdjustmentReason:
+            r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier ? r.dateAdjustment.label : '',
+          priceAdjustmentMultiplier:
+            r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier ? r.dateAdjustment.multiplier : 1,
+        })),
+        grandTotal: psGrandTotal,
+      }),
+    });
+  }
+
   function resetFormFields() {
     setSelectedCities([]);
     setShowCityDropdown(false);
@@ -960,7 +1271,7 @@ export default function App() {
 
     setStatus('sending');
     try {
-      await Promise.all([sendLeadEmail(newReferenceId), submitLeadToSheet(newReferenceId)]);
+      await Promise.all([sendLeadEmail(newReferenceId), submitLeadToSheet(newReferenceId), submitLeadToBackend(newReferenceId)]);
     } catch (err) {
       // The customer should never see backend plumbing trouble.
       // If leads stop arriving, check EMAILJS_CONFIG, APPS_SCRIPT_URL and the browser console.
@@ -1209,6 +1520,122 @@ export default function App() {
         @media (max-width: 640px) {
           .pb-landing { padding: 20px 0; }
           .pb-landing-options { grid-template-columns: 1fr; }
+        }
+
+        .pb-employee-link-wrap { margin-top: 28px; text-align: center; }
+        .pb-employee-link {
+          background: transparent;
+          border: none;
+          color: var(--ink-muted);
+          font-size: 12px;
+          cursor: pointer;
+          text-decoration: underline;
+          text-underline-offset: 3px;
+          padding: 4px;
+        }
+        .pb-employee-link:hover { color: var(--gold); }
+
+        .pb-dashboard { max-width: 1100px; margin: 0 auto; }
+        .pb-dash-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 24px;
+        }
+        .pb-dash-title {
+          font-family: 'Bebas Neue', sans-serif;
+          font-size: clamp(28px, 4vw, 38px);
+          letter-spacing: 0.02em;
+          margin: 0;
+          color: var(--ink);
+        }
+        .pb-dash-filters {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 16px;
+          align-items: flex-end;
+          margin-bottom: 22px;
+          padding: 16px;
+          background: var(--surface);
+          border: 1px solid var(--line);
+          border-radius: 12px;
+        }
+        .pb-dash-filters .pb-field { min-width: 160px; flex: 1; margin-bottom: 0; }
+        .pb-dash-list { display: flex; flex-direction: column; gap: 10px; }
+        .pb-dash-empty { color: var(--ink-muted); font-size: 13.5px; padding: 24px; text-align: center; }
+        .pb-dash-row {
+          display: grid;
+          grid-template-columns: 110px 130px 1fr 190px 120px;
+          align-items: center;
+          gap: 14px;
+          background: var(--surface);
+          border: 1px solid var(--line);
+          border-radius: 10px;
+          padding: 14px 18px;
+          cursor: pointer;
+          transition: border-color 0.15s, transform 0.15s;
+        }
+        .pb-dash-row:hover { border-color: var(--gold); transform: translateY(-1px); }
+        .pb-dash-row-ref { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--gold); }
+        .pb-dash-badge {
+          display: inline-block;
+          font-size: 10.5px;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          padding: 4px 9px;
+          border-radius: 999px;
+          text-align: center;
+          white-space: nowrap;
+        }
+        .pb-dash-badge-bulk { background: rgba(231, 178, 61, 0.15); color: var(--gold); border: 1px solid rgba(231, 178, 61, 0.35); }
+        .pb-dash-badge-ps { background: rgba(209, 39, 46, 0.15); color: var(--red); border: 1px solid rgba(209, 39, 46, 0.35); }
+        .pb-dash-row-name { font-size: 13.5px; color: var(--ink); font-weight: 600; }
+        .pb-dash-row-date { font-size: 12px; color: var(--ink-muted); }
+        .pb-dash-row-total { font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 700; color: var(--ink); text-align: right; }
+
+        .pb-dash-detail { max-width: 480px; margin: 0 auto; }
+
+        .pb-pi-row-header {
+          display: grid;
+          grid-template-columns: 1fr 90px 70px 100px;
+          gap: 8px;
+          font-size: 10.5px;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #6b6058;
+          padding: 0 0 6px;
+        }
+        .pb-pi-row {
+          display: grid;
+          grid-template-columns: 1fr 90px 70px 100px;
+          gap: 8px;
+          align-items: center;
+          padding: 8px 0;
+          border-bottom: 1px dotted #d8cdb9;
+        }
+        .pb-pi-row:last-child { border-bottom: none; }
+        .pb-pi-row input.pb-input { padding: 8px 10px; font-size: 13px; }
+        .pb-pi-row-subtotal {
+          font-family: 'IBM Plex Mono', monospace;
+          font-weight: 700;
+          color: var(--stub-ink);
+          text-align: right;
+          font-size: 13px;
+        }
+
+        @media (max-width: 640px) {
+          .pb-dash-row {
+            grid-template-columns: 1fr 1fr;
+            grid-template-areas: "ref badge" "name name" "date total";
+          }
+          .pb-dash-row-ref { grid-area: ref; }
+          .pb-dash-badge { grid-area: badge; justify-self: start; }
+          .pb-dash-row-name { grid-area: name; }
+          .pb-dash-row-date { grid-area: date; }
+          .pb-dash-row-total { grid-area: total; }
+          .pb-pi-row-header, .pb-pi-row { grid-template-columns: 1fr 70px 55px 80px; }
         }
 
         .pb-modal-backdrop {
@@ -1885,6 +2312,345 @@ export default function App() {
                 <span className="pb-landing-option-cta">Get a private screening quote &rarr;</span>
               </div>
             </div>
+
+            <div className="pb-employee-link-wrap">
+              <button
+                type="button"
+                className="pb-employee-link"
+                onClick={() => setMode(isEmployeeLoggedIn ? 'dashboard' : 'employeeLogin')}
+              >
+                Employee Login
+              </button>
+            </div>
+          </div>
+        )}
+
+        {mode === 'employeeLogin' && (
+          <div className="pb-landing" style={{ maxWidth: 420 }}>
+            <button type="button" className="pb-mode-back" onClick={() => setMode(null)}>
+              &larr; Back
+            </button>
+            <p className="pb-landing-eyebrow">Staff Access</p>
+            <h1 className="pb-landing-title">Employee <span>Login</span></h1>
+            <p className="pb-landing-subtitle" style={{ margin: '0 auto 24px' }}>
+              Sign in to view and manage submitted leads.
+            </p>
+            <div style={{ textAlign: 'left' }}>
+              <div className="pb-field">
+                <label className="pb-label">Email</label>
+                <input
+                  className="pb-input"
+                  type="email"
+                  value={employeeLoginEmail}
+                  onChange={(e) => setEmployeeLoginEmail(e.target.value)}
+                  placeholder="you@pvrinox.com"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleEmployeeLogin();
+                  }}
+                />
+              </div>
+              <div className="pb-field">
+                <label className="pb-label">Password</label>
+                <input
+                  className="pb-input"
+                  type="password"
+                  value={employeeLoginPassword}
+                  onChange={(e) => setEmployeeLoginPassword(e.target.value)}
+                  placeholder="••••••••"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleEmployeeLogin();
+                  }}
+                />
+              </div>
+              {employeeLoginError && (
+                <div className="pb-error" style={{ margin: '0 0 16px' }}>
+                  {employeeLoginError}
+                </div>
+              )}
+              <button
+                type="button"
+                className="pb-btn pb-btn-primary"
+                style={{ width: '100%' }}
+                onClick={handleEmployeeLogin}
+                disabled={employeeLoginSubmitting}
+              >
+                {employeeLoginSubmitting ? 'Logging in...' : 'Log in'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {mode === 'dashboard' && isEmployeeLoggedIn && (
+          <div className="pb-dashboard">
+            <div className="pb-dash-header">
+              <div>
+                <p className="pb-landing-eyebrow" style={{ margin: '0 0 4px' }}>Staff Dashboard</p>
+                <h1 className="pb-dash-title">Welcome, {loggedInEmployeeName}</h1>
+              </div>
+              <button type="button" className="pb-lookup-trigger" onClick={handleEmployeeLogout}>
+                Log out
+              </button>
+            </div>
+
+            {!selectedLead && (
+              <>
+                <div className="pb-dash-filters">
+                  <div className="pb-field" style={{ marginBottom: 0 }}>
+                    <label className="pb-label">From</label>
+                    <input
+                      type="date"
+                      className="pb-input"
+                      value={dashboardDateFrom}
+                      onChange={(e) => setDashboardDateFrom(e.target.value)}
+                    />
+                  </div>
+                  <div className="pb-field" style={{ marginBottom: 0 }}>
+                    <label className="pb-label">To</label>
+                    <input
+                      type="date"
+                      className="pb-input"
+                      value={dashboardDateTo}
+                      onChange={(e) => setDashboardDateTo(e.target.value)}
+                    />
+                  </div>
+                  <div className="pb-field" style={{ marginBottom: 0 }}>
+                    <label className="pb-label">Sort by</label>
+                    <select className="pb-input" value={dashboardSort} onChange={(e) => setDashboardSort(e.target.value)}>
+                      <option value="recent">Most recent</option>
+                      <option value="value">Order value</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="pb-dash-list">
+                  {dashboardLoading && <div className="pb-dash-empty">Loading leads...</div>}
+                  {!dashboardLoading && dashboardError && (
+                    <div className="pb-dash-empty">
+                      Something went wrong loading leads.{' '}
+                      <button type="button" className="pb-employee-link" style={{ padding: 0 }} onClick={fetchDashboardLeads}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                  {!dashboardLoading && !dashboardError && dashboardLeads.length === 0 && (
+                    <div className="pb-dash-empty">No leads in this date range.</div>
+                  )}
+                  {!dashboardLoading && !dashboardError && dashboardLeads.map((lead) => (
+                    <div key={lead.referenceId} className="pb-dash-row" onClick={() => openLeadDetail(lead.referenceId)}>
+                      <span className="pb-dash-row-ref">{lead.referenceId}</span>
+                      <span
+                        className={
+                          'pb-dash-badge ' +
+                          (lead.bookingType === 'Private Screening' ? 'pb-dash-badge-ps' : 'pb-dash-badge-bulk')
+                        }
+                      >
+                        {lead.bookingType}
+                      </span>
+                      <span className="pb-dash-row-name">{lead.customerName}</span>
+                      <span className="pb-dash-row-date">{formatSubmittedOn(lead.submittedAt)}</span>
+                      <span className="pb-dash-row-total">{formatINR(lead.grandTotal)}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {selectedLead && (
+              <div className="pb-dash-detail">
+                <button type="button" className="pb-mode-back" onClick={closeLeadDetail}>
+                  &larr; Back to all leads
+                </button>
+
+                <div className="pb-stub">
+                  <div className="pb-stub-top">
+                    <div className="pb-stub-eyebrow">Reference: {selectedLead.referenceId}</div>
+                    <div className="pb-stub-admit" style={{ fontSize: 22 }}>{selectedLead.bookingType}</div>
+                    <div className="pb-stub-sub">{formatSubmittedOn(selectedLead.submittedAt)}</div>
+                  </div>
+                  <div className="pb-stub-divider" />
+                  <div className="pb-stub-rows">
+                    <div className="pb-stub-row">
+                      <span className="pb-stub-row-label">Customer</span>
+                      <span className="pb-stub-row-value">{selectedLead.customerName}</span>
+                    </div>
+                    <div className="pb-stub-row">
+                      <span className="pb-stub-row-label">Phone</span>
+                      <span className="pb-stub-row-value">{selectedLead.phone}</span>
+                    </div>
+                    <div className="pb-stub-row">
+                      <span className="pb-stub-row-label">Email</span>
+                      <span className="pb-stub-row-value">{selectedLead.email}</span>
+                    </div>
+                  </div>
+                  <div className="pb-stub-divider" />
+                  <div className="pb-stub-rows">
+                    {selectedLead.cinemas.map((c, idx) => {
+                      const isPS = c.bookingType === 'Private Screening';
+                      return (
+                        <div key={idx} className="pb-stub-cinema-block">
+                          {selectedLead.cinemas.length > 1 && (
+                            <div className="pb-stub-cinema-heading">{idx + 1}. {c.cinema}</div>
+                          )}
+                          {selectedLead.cinemas.length === 1 && (
+                            <div className="pb-stub-row">
+                              <span className="pb-stub-row-label">Cinema</span>
+                              <span className="pb-stub-row-value">{c.cinema}</span>
+                            </div>
+                          )}
+                          {!isPS && (
+                            <div className="pb-stub-row">
+                              <span className="pb-stub-row-label">Format</span>
+                              <span className="pb-stub-row-value">{c.format}</span>
+                            </div>
+                          )}
+                          {isPS && (
+                            <div className="pb-stub-row">
+                              <span className="pb-stub-row-label">Audi</span>
+                              <span className="pb-stub-row-value">
+                                Audi {c.audiNumber} ({c.audiFormat}, {c.audiCapacity} seats) — {c.requiredTickets} tickets
+                                required for {c.desiredAttendees} guests
+                              </span>
+                            </div>
+                          )}
+                          {isPS && c.eventType && (
+                            <div className="pb-stub-row">
+                              <span className="pb-stub-row-label">Event</span>
+                              <span className="pb-stub-row-value">
+                                {c.eventDetail ? `${c.eventType} — ${c.eventDetail}` : c.eventType}
+                              </span>
+                            </div>
+                          )}
+                          <div className="pb-stub-row">
+                            <span className="pb-stub-row-label">Date</span>
+                            <span className="pb-stub-row-value">{formatPlainDate(c.requestDate)}</span>
+                          </div>
+                          <div className="pb-stub-row">
+                            <span className="pb-stub-row-label">Time slot</span>
+                            <span className="pb-stub-row-value">
+                              {c.timeSlot} ({c.timeSlotRange})
+                            </span>
+                          </div>
+                          {isPS ? (
+                            <div className="pb-stub-row">
+                              <span className="pb-stub-row-label">
+                                Tickets required ({c.requiredTickets} &times; {formatINR(c.pricePerTicket)})
+                              </span>
+                              <span className="pb-stub-row-value">{formatINR(c.requiredTickets * c.pricePerTicket)}</span>
+                            </div>
+                          ) : (
+                            <div className="pb-stub-row">
+                              <span className="pb-stub-row-label">
+                                Tickets ({c.ticketCount} &times; {formatINR(c.pricePerTicket)})
+                              </span>
+                              <span className="pb-stub-row-value">{formatINR(c.ticketCount * c.pricePerTicket)}</span>
+                            </div>
+                          )}
+                          <div className="pb-stub-row">
+                            <span className="pb-stub-row-label">Food</span>
+                            <span className="pb-stub-row-value">{c.foodCombo}</span>
+                          </div>
+                          <div className="pb-stub-row pb-stub-row-subtotal">
+                            <span className="pb-stub-row-label">Subtotal</span>
+                            <span className="pb-stub-row-value">{formatINR(c.subtotal)}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="pb-stub-total">
+                    <span className="pb-stub-total-label">Grand total</span>
+                    <span className="pb-stub-total-value">{formatINR(selectedLead.grandTotal)}</span>
+                  </div>
+                  <div className="pb-barcode">
+                    {Array.from({ length: 36 }).map((_, i) => (
+                      <span key={i} style={{ width: (i % 5 === 0 ? 3 : 1.5) + 'px' }} />
+                    ))}
+                  </div>
+                </div>
+
+                {!piLineItems && (
+                  <button
+                    type="button"
+                    className="pb-btn pb-btn-primary"
+                    style={{ marginTop: 16, width: '100%' }}
+                    onClick={() => startPiEditor(selectedLead)}
+                    disabled={piSaving}
+                  >
+                    {piSaving ? 'Creating...' : 'Create PI'}
+                  </button>
+                )}
+
+                {piLineItems && (
+                  <div className="pb-stub" style={{ marginTop: 16 }}>
+                    <div className="pb-stub-top">
+                      <div className="pb-stub-admit" style={{ fontSize: 22 }}>Proforma Invoice</div>
+                      <div className="pb-stub-sub">{selectedLead.referenceId}</div>
+                    </div>
+                    <div className="pb-stub-divider" />
+                    <div className="pb-stub-rows">
+                      <div className="pb-pi-row-header">
+                        <span>Line item</span>
+                        <span>Price</span>
+                        <span>Qty</span>
+                        <span>Subtotal</span>
+                      </div>
+                      {piLineItems.map((item) => (
+                        <div key={item.id} className="pb-pi-row">
+                          <input
+                            className="pb-input"
+                            style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
+                            value={item.label}
+                            onChange={(e) => updatePiLineItem(item.id, 'label', e.target.value)}
+                          />
+                          <input
+                            type="number"
+                            className="pb-input"
+                            style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
+                            value={item.price}
+                            onChange={(e) => updatePiLineItem(item.id, 'price', e.target.value)}
+                          />
+                          <input
+                            type="number"
+                            className="pb-input"
+                            style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
+                            value={item.qty}
+                            onChange={(e) => updatePiLineItem(item.id, 'qty', e.target.value)}
+                          />
+                          <span className="pb-pi-row-subtotal">
+                            {formatINR((Number(item.price) || 0) * (Number(item.qty) || 0))}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="pb-stub-total">
+                      <span className="pb-stub-total-label">PI Grand total</span>
+                      <span className="pb-stub-total-value">{formatINR(piGrandTotal)}</span>
+                    </div>
+
+                    {piError && (
+                      <div className="pb-error" style={{ margin: '0 22px 14px' }}>
+                        {piError}
+                      </div>
+                    )}
+
+                    {!piSent ? (
+                      <div className="pb-actions" style={{ padding: '0 22px 22px' }}>
+                        <button type="button" className="pb-btn pb-btn-primary" onClick={handleSendPi} disabled={piSending}>
+                          {piSending ? 'Sending...' : 'Send PI'}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="pb-result">
+                        <div className="pb-result-title">PI sent</div>
+                        <p className="pb-result-text">
+                          The proforma invoice was emailed to {selectedLead.email}.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

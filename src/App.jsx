@@ -1904,7 +1904,7 @@ export default function App() {
           transition: opacity 0.15s;
         }
         .pb-brand-logo:hover { opacity: 0.8; }
-        .pb-brand-logo-img { display: block; height: 48px; width: auto; }
+        .pb-brand-logo-img { display: block; height: 40px; width: auto; }
         .pb-lookup-trigger {
           background: transparent;
           border: 1px solid var(--line);
@@ -2813,7 +2813,7 @@ export default function App() {
           .pb-card { padding: 16px; }
 
           .pb-top-bar { justify-content: space-between; margin-bottom: 14px; }
-          .pb-brand-logo-img { height: 36px; }
+          .pb-brand-logo-img { height: 30px; }
           .pb-lookup-trigger { width: auto; padding: 8px 14px; font-size: 12px; min-height: 40px; }
 
           .pb-title { font-size: clamp(26px, 8vw, 34px); letter-spacing: 0.01em; }

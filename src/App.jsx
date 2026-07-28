@@ -30,7 +30,7 @@ const APPS_SCRIPT_URL =
 
 // Real brand mark (replaces the old hand-drawn "PVR * INOX" text/shapes) — used in
 // the header and embedded into both the quote PDF and the Proforma Invoice PDF.
-const PVR_INOX_LOGO_URL = '/assests/PVR INOX LOGO.jpeg';
+const PVR_INOX_LOGO_URL = '/assests/pvr-inox-logo.png';
 
 // Manual city overrides for cinema names where the naive "last word" rule doesn't match the real city
 const CITY_OVERRIDES = {

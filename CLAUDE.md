@@ -142,9 +142,16 @@ URL) and returns the `jsPDF` doc without saving it — callers choose
 `doc.save(...)` (staff "Download PDF") or `doc.output('datauristring')`
 (handed to the send endpoint as an email attachment).
 
-- `api/leads/[id]/pi.js` — upserts the one-row-per-lead draft PI
+- `api/leads/[id]/pi/index.js` — upserts the one-row-per-lead draft PI
   (`performa_invoices`, unique on `lead_id`) with the full `piData` object
-  from the client; called when "Create PI" is clicked.
+  from the client; called when "Create PI" is clicked. **Must stay
+  `pi/index.js`, not a sibling `pi.js` next to the `pi/` folder** — that
+  exact layout (`api/leads/[id]/pi.js` + `api/leads/[id]/pi/send.js`)
+  previously broke Vercel's route generation for both endpoints (405
+  "Method not allowed" in production on POST, despite correct handler
+  code) — same basename as both a file and a folder is ambiguous to the
+  build system. `index.js` still resolves to `/api/leads/:id/pi`, so the
+  frontend fetch URLs didn't need to change when this was fixed.
 - `api/leads/[id]/pi/send.js` — **uses Resend, not EmailJS** (`resend` npm
   package, `RESEND_API_KEY`) — scoped to PI sending only, the customer
   lead-notification emails (`sendLeadEmail`/`sendPSLeadEmail`) are

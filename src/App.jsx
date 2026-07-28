@@ -28,6 +28,10 @@ const EMAILJS_CONFIG = {
 const APPS_SCRIPT_URL =
   'https://script.google.com/macros/s/AKfycbyh-LpQs8YyH9wyjTV4hwwAXOe0rxtTgbX_2L6WEXRu19gDuwdmvJQE8ulrTUSqiryCAA/exec';
 
+// Real brand mark (replaces the old hand-drawn "PVR * INOX" text/shapes) — used in
+// the header and embedded into both the quote PDF and the Proforma Invoice PDF.
+const PVR_INOX_LOGO_URL = '/assests/PVR INOX LOGO.jpeg';
+
 // Manual city overrides for cinema names where the naive "last word" rule doesn't match the real city
 const CITY_OVERRIDES = {
   'PVR City Mall Yamuna Nagar': 'Yamuna Nagar',
@@ -1884,11 +1888,6 @@ export default function App() {
         .pb-brand-logo {
           display: flex;
           align-items: center;
-          gap: 7px;
-          font-family: 'Bebas Neue', sans-serif;
-          font-size: 24px;
-          letter-spacing: 0.02em;
-          line-height: 1;
           flex-shrink: 0;
           background: transparent;
           border: none;
@@ -1897,8 +1896,7 @@ export default function App() {
           transition: opacity 0.15s;
         }
         .pb-brand-logo:hover { opacity: 0.8; }
-        .pb-brand-pvr, .pb-brand-inox { color: var(--gold); }
-        .pb-brand-star { color: var(--ink); font-size: 13px; }
+        .pb-brand-logo-img { display: block; height: 32px; width: auto; border-radius: 4px; }
         .pb-lookup-trigger {
           background: transparent;
           border: 1px solid var(--line);
@@ -2807,8 +2805,7 @@ export default function App() {
           .pb-card { padding: 16px; }
 
           .pb-top-bar { justify-content: space-between; margin-bottom: 14px; }
-          .pb-brand-logo { font-size: 18px; gap: 5px; }
-          .pb-brand-star { font-size: 10px; }
+          .pb-brand-logo-img { height: 24px; }
           .pb-lookup-trigger { width: auto; padding: 8px 14px; font-size: 12px; min-height: 40px; }
 
           .pb-title { font-size: clamp(26px, 8vw, 34px); letter-spacing: 0.01em; }
@@ -2846,9 +2843,7 @@ export default function App() {
 
       <div className="pb-top-bar">
         <button type="button" className="pb-brand-logo" aria-label="PVR INOX — return to booking type choice" onClick={() => setMode(null)}>
-          <span className="pb-brand-pvr">PVR</span>
-          <span className="pb-brand-star">&#9733;</span>
-          <span className="pb-brand-inox">INOX</span>
+          <img className="pb-brand-logo-img" src={PVR_INOX_LOGO_URL} alt="PVR INOX" />
         </button>
         <button type="button" className="pb-lookup-trigger" onClick={openLookupModal}>
           Check a reference number

@@ -1,5 +1,5 @@
-import { supabaseAdmin } from '../../_lib/supabaseAdmin.js';
-import { requireSession } from '../../_lib/auth.js';
+import { supabaseAdmin } from '../../../_lib/supabaseAdmin.js';
+import { requireSession } from '../../../_lib/auth.js';
 
 // POST /api/leads/:id/pi — create or update the (single) draft PI for a lead.
 // One row per lead_id: re-editing an existing PI upserts it back to 'draft'
@@ -7,6 +7,11 @@ import { requireSession } from '../../_lib/auth.js';
 // party/line-items/totals/notes/bank details, see buildPiDataFromLead in
 // src/App.jsx) — stored whole in the `items` jsonb column, no schema change.
 // `grand_total` is duplicated out of piData.total for dashboard sorting.
+//
+// Lives at pi/index.js (not a sibling pi.js) so "pi" is consistently a folder —
+// having both api/leads/[id]/pi.js and api/leads/[id]/pi/send.js previously
+// broke Vercel's route generation for both endpoints (405s in production even
+// though the handlers were correct). index.js still resolves to /api/leads/:id/pi.
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');

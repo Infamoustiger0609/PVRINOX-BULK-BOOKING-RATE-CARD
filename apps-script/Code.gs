@@ -37,7 +37,8 @@ const COLUMNS = [
   'Required Tickets',
   'Desired Attendees',
   'Request Date',
-  'Movie Name',
+  'Event Type',
+  'Event Detail',
   'Food Combo',
   'Subtotal',
   'Price Adjustment Reason',
@@ -106,8 +107,10 @@ function doPost(e) {
           return c.desiredAttendees != null ? c.desiredAttendees : '';
         case 'Request Date':
           return c.requestDate;
-        case 'Movie Name':
-          return c.movieName;
+        case 'Event Type':
+          return c.eventType || '';
+        case 'Event Detail':
+          return c.eventDetail || '';
         case 'Food Combo':
           return c.foodCombo;
         case 'Subtotal':
@@ -165,7 +168,8 @@ function doGet(e) {
       requiredTickets: val(row, 'Required Tickets'),
       desiredAttendees: val(row, 'Desired Attendees'),
       requestDate: val(row, 'Request Date'),
-      movieName: val(row, 'Movie Name'),
+      eventType: val(row, 'Event Type'),
+      eventDetail: val(row, 'Event Detail'),
       foodCombo: val(row, 'Food Combo'),
       subtotal: val(row, 'Subtotal'),
       priceAdjustmentReason: val(row, 'Price Adjustment Reason'),

@@ -117,6 +117,20 @@ function formatSurgeNote(adjustment) {
   return `${adjustment.label} (${pct >= 0 ? '+' : ''}${pct}%)`;
 }
 
+const EVENT_TYPES = [
+  'Movie',
+  'Birthday Party',
+  'Photo Shoot',
+  'Wedding',
+  'Anniversary',
+  'Engagement',
+  'Baby Shower',
+  'Corporate Event',
+  'Product Launch',
+  'Reunion',
+  'Other',
+];
+
 const FOOD_COMBOS = [
   { id: 'none', label: 'No food', items: 'Tickets only', price: 0 },
   { id: 'small', label: 'Small Combo', items: 'Small pepsi + small popcorn', price: 550 },
@@ -273,6 +287,7 @@ export default function App() {
   const [status, setStatus] = useState('form'); // form | sending | interested | declined
   const [formError, setFormError] = useState('');
   const [confirmedFirstName, setConfirmedFirstName] = useState('');
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
 
   const [showLookupModal, setShowLookupModal] = useState(false);
   const [lookupRef, setLookupRef] = useState('');
@@ -334,7 +349,7 @@ export default function App() {
   const [psShowCinemaDropdown, setPSShowCinemaDropdown] = useState(false);
   const [psSelectedCinemaNames, setPSSelectedCinemaNames] = useState([]);
   const [psCinemaQuery, setPSCinemaQuery] = useState('');
-  // { [cinemaName]: { timeSlotId, desiredAttendeesInput, selectedAudiNumber, requestDate, movieName, foodComboId, foodDropdownOpen, timeSlotDropdownOpen } }
+  // { [cinemaName]: { timeSlotId, desiredAttendeesInput, selectedAudiNumber, requestDate, eventType, eventDetail, eventTypeDropdownOpen, eventTypeQuery, foodComboId, foodDropdownOpen, timeSlotDropdownOpen } }
   const [psCinemaDetails, setPSCinemaDetails] = useState({});
   const psCinemaFieldRef = useRef(null);
 
@@ -345,6 +360,7 @@ export default function App() {
   const [psStatus, setPSStatus] = useState('form'); // form | sending | interested | declined
   const [psFormError, setPSFormError] = useState('');
   const [psConfirmedFirstName, setPSConfirmedFirstName] = useState('');
+  const [psAgreedToTerms, setPSAgreedToTerms] = useState(false);
 
   const { cinemaNames: PS_CINEMA_NAMES, allCities: PS_ALL_CITIES } = useMemo(() => {
     if (!privateScreeningData) return { cinemaNames: [], allCities: [] };
@@ -487,7 +503,10 @@ export default function App() {
       desiredAttendeesInput: '',
       selectedAudiNumber: null,
       requestDate: '',
-      movieName: '',
+      eventType: '',
+      eventDetail: '',
+      eventTypeQuery: '',
+      eventTypeDropdownOpen: false,
       foodComboId: 'none',
       foodDropdownOpen: false,
       timeSlotDropdownOpen: false,
@@ -560,7 +579,8 @@ export default function App() {
       r.desiredAttendees > 0 &&
       r.selectedAudi &&
       r.requestDate &&
-      r.movieName.trim() &&
+      r.eventType &&
+      (!(r.eventType === 'Movie' || r.eventType === 'Other') || r.eventDetail.trim()) &&
       !(r.dateAdjustment && r.dateAdjustment.blocked)
   );
   const psQuoteReady = Boolean(psSelectedCinemaNames.length > 0 && completePSCinemas.length === psSelectedCinemaNames.length);
@@ -611,7 +631,10 @@ export default function App() {
           desiredAttendeesInput: '',
           selectedAudiNumber: null,
           requestDate: '',
-          movieName: '',
+          eventType: '',
+          eventDetail: '',
+          eventTypeQuery: '',
+          eventTypeDropdownOpen: false,
           foodComboId: 'none',
           foodDropdownOpen: false,
           timeSlotDropdownOpen: false,
@@ -639,6 +662,7 @@ export default function App() {
     setPSPhone('');
     setPSEmail('');
     setPSFormError('');
+    setPSAgreedToTerms(false);
   }
 
   async function handlePSInterested() {
@@ -678,7 +702,7 @@ export default function App() {
       heading: `${r.cinemaName} — ${getCityForPSCinema(privateScreeningData, r.cinemaName)}`,
       rows: [
         ['Audi', `Audi ${r.selectedAudi.audi} (${r.selectedAudi.format}, ${r.selectedAudi.capacity} seats)`],
-        ['Movie', r.movieName],
+        ['Event', r.eventDetail ? `${r.eventType} — ${r.eventDetail}` : r.eventType],
         ['Time slot', `${r.activeTimeSlot.label} (${r.activeTimeSlot.range})`],
         ['Request date', r.requestDate],
         ['Attendees', String(r.desiredAttendees)],
@@ -828,7 +852,7 @@ export default function App() {
         return (
           prefix + r.cinemaName + ' — Private Screening\n' +
           '   Audi: ' + r.selectedAudi.audi + ' (' + r.selectedAudi.format + ', ' + r.selectedAudi.capacity + ' seats)\n' +
-          '   Movie: ' + r.movieName + '\n' +
+          '   Event: ' + r.eventType + (r.eventDetail ? ' — ' + r.eventDetail : '') + '\n' +
           '   Date: ' + r.requestDate + '\n' +
           '   Time slot: ' + r.activeTimeSlot.label + ' (' + r.activeTimeSlot.range + ')\n' +
           '   Desired attendees: ' + r.desiredAttendees + '\n' +
@@ -893,7 +917,8 @@ export default function App() {
           timeSlotRange: r.activeTimeSlot.range,
           pricePerTicket: r.selectedAudi.rate,
           requestDate: r.requestDate,
-          movieName: r.movieName,
+          eventType: r.eventType,
+          eventDetail: r.eventDetail,
           foodCombo: r.activeCombo ? r.activeCombo.label : 'None',
           subtotal: r.lineTotal,
           priceAdjustmentReason:
@@ -916,6 +941,7 @@ export default function App() {
     setPhone('');
     setEmail('');
     setFormError('');
+    setAgreedToTerms(false);
   }
 
   async function handleInterested() {
@@ -1496,7 +1522,8 @@ export default function App() {
         }
         .pb-audi-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+          grid-template-columns: repeat(2, 1fr);
+          grid-auto-flow: column;
           gap: 10px;
         }
         .pb-audi-card {
@@ -1715,6 +1742,32 @@ export default function App() {
 
         .pb-contact-note { padding: 0 22px 4px; font-size: 11.5px; color: #8a8078; }
 
+        .pb-terms-row {
+          padding: 4px 22px 14px;
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 8px;
+          font-size: 12.5px;
+          color: #6b6058;
+        }
+        .pb-terms-row input[type="checkbox"] {
+          width: 15px;
+          height: 15px;
+          accent-color: var(--red);
+          cursor: pointer;
+          flex-shrink: 0;
+        }
+        .pb-terms-row label { cursor: pointer; }
+        .pb-terms-row a {
+          margin-left: auto;
+          color: var(--red);
+          font-weight: 600;
+          text-decoration: none;
+          white-space: nowrap;
+        }
+        .pb-terms-row a:hover { text-decoration: underline; }
+
         .pb-error {
           margin: 0 22px 14px;
           padding: 10px 12px;
@@ -1787,7 +1840,7 @@ export default function App() {
           .pb-two-col { grid-template-columns: 1fr; }
           .pb-stub-admit { font-size: 26px; }
           .pb-stub-top, .pb-stub-rows, .pb-stub-total, .pb-actions, .pb-barcode,
-          .pb-contact-note, .pb-error, .pb-tentative-note {
+          .pb-contact-note, .pb-error, .pb-tentative-note, .pb-terms-row {
             padding-left: 16px;
             padding-right: 16px;
           }
@@ -2313,6 +2366,19 @@ export default function App() {
 
                     {formError && <div className="pb-error">{formError}</div>}
 
+                    <div className="pb-terms-row">
+                      <input
+                        type="checkbox"
+                        id="agreedToTerms"
+                        checked={agreedToTerms}
+                        onChange={(e) => setAgreedToTerms(e.target.checked)}
+                      />
+                      <label htmlFor="agreedToTerms">I have read and agree to the Terms &amp; Conditions</label>
+                      <a href="/PVR_INOX_Terms_and_Conditions.html" target="_blank" rel="noopener noreferrer">
+                        View Terms &amp; Conditions
+                      </a>
+                    </div>
+
                     <div className="pb-actions">
                       <button className="pb-btn pb-btn-secondary" onClick={downloadQuotePdf}>
                         Download PDF
@@ -2320,7 +2386,7 @@ export default function App() {
                       <button className="pb-btn pb-btn-secondary" onClick={handleNotInterested} disabled={status === 'sending'}>
                         Not right now
                       </button>
-                      <button className="pb-btn pb-btn-primary" onClick={handleInterested} disabled={status === 'sending'}>
+                      <button className="pb-btn pb-btn-primary" onClick={handleInterested} disabled={status === 'sending' || !agreedToTerms}>
                         {status === 'sending' ? 'Sending...' : "I'm interested"}
                       </button>
                     </div>
@@ -2636,14 +2702,55 @@ export default function App() {
 
                             <div className="pb-field" style={{ marginBottom: 0 }}>
                               <label className="pb-label">
-                                Movie name<span className="pb-required">*</span>
+                                Event type<span className="pb-required">*</span>
                               </label>
+                              <div className="pb-combobox">
+                                <input
+                                  type="text"
+                                  className="pb-input"
+                                  placeholder={r.eventType || 'Search event types...'}
+                                  value={r.eventTypeQuery || ''}
+                                  onChange={(e) =>
+                                    updatePSCinemaDetail(r.cinemaName, { eventTypeQuery: e.target.value, eventTypeDropdownOpen: true })
+                                  }
+                                  onFocus={() => updatePSCinemaDetail(r.cinemaName, { eventTypeDropdownOpen: true })}
+                                  onBlur={() =>
+                                    setTimeout(
+                                      () => updatePSCinemaDetail(r.cinemaName, { eventTypeDropdownOpen: false, eventTypeQuery: '' }),
+                                      120
+                                    )
+                                  }
+                                />
+                                <span className="pb-combobox-caret">&#9662;</span>
+                              </div>
+                              {r.eventTypeDropdownOpen && (
+                                <div className="pb-suggestions pb-city-dropdown">
+                                  {EVENT_TYPES.filter((et) =>
+                                    et.toLowerCase().includes((r.eventTypeQuery || '').trim().toLowerCase())
+                                  ).map((et) => (
+                                    <div
+                                      key={et}
+                                      className={'pb-suggestion pb-city-option' + (r.eventType === et ? ' active' : '')}
+                                      onMouseDown={() =>
+                                        updatePSCinemaDetail(r.cinemaName, {
+                                          eventType: et,
+                                          eventTypeQuery: '',
+                                          eventTypeDropdownOpen: false,
+                                        })
+                                      }
+                                    >
+                                      {et}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                               <input
                                 className="pb-input"
-                                placeholder="Which movie is this for?"
-                                value={r.movieName}
-                                onChange={(e) => updatePSCinemaDetail(r.cinemaName, { movieName: e.target.value })}
-                                required
+                                style={{ marginTop: 8 }}
+                                placeholder={r.eventType === 'Movie' ? 'Which movie?' : 'Any additional details (optional)'}
+                                value={r.eventDetail}
+                                onChange={(e) => updatePSCinemaDetail(r.cinemaName, { eventDetail: e.target.value })}
+                                required={r.eventType === 'Movie' || r.eventType === 'Other'}
                               />
                             </div>
                           </div>
@@ -2694,7 +2801,13 @@ export default function App() {
                                     Enter how many people are attending to see ticket requirements and pricing.
                                   </div>
                                 )}
-                                <div className="pb-audi-grid" style={{ marginTop: r.desiredAttendees === 0 ? 8 : 0 }}>
+                                <div
+                                  className="pb-audi-grid"
+                                  style={{
+                                    marginTop: r.desiredAttendees === 0 ? 8 : 0,
+                                    gridTemplateRows: `repeat(${Math.ceil(r.audiOptions.length / 2)}, auto)`,
+                                  }}
+                                >
                                   {r.audiOptions.map((a) => (
                                     <div
                                       key={a.audi}
@@ -2795,8 +2908,10 @@ export default function App() {
                         </span>
                       </div>
                       <div className="pb-stub-row">
-                        <span className="pb-stub-row-label">Movie</span>
-                        <span className="pb-stub-row-value">{r.movieName.trim() ? r.movieName : '—'}</span>
+                        <span className="pb-stub-row-label">Event</span>
+                        <span className="pb-stub-row-value">
+                          {r.eventType ? (r.eventDetail ? `${r.eventType} — ${r.eventDetail}` : r.eventType) : '—'}
+                        </span>
                       </div>
                       <div className="pb-stub-row">
                         <span className="pb-stub-row-label">Date</span>
@@ -2890,6 +3005,19 @@ export default function App() {
 
                     {psFormError && <div className="pb-error">{psFormError}</div>}
 
+                    <div className="pb-terms-row">
+                      <input
+                        type="checkbox"
+                        id="psAgreedToTerms"
+                        checked={psAgreedToTerms}
+                        onChange={(e) => setPSAgreedToTerms(e.target.checked)}
+                      />
+                      <label htmlFor="psAgreedToTerms">I have read and agree to the Terms &amp; Conditions</label>
+                      <a href="/PVR_INOX_Terms_and_Conditions.html" target="_blank" rel="noopener noreferrer">
+                        View Terms &amp; Conditions
+                      </a>
+                    </div>
+
                     <div className="pb-actions">
                       <button className="pb-btn pb-btn-secondary" onClick={downloadPSQuotePdf}>
                         Download PDF
@@ -2897,7 +3025,7 @@ export default function App() {
                       <button className="pb-btn pb-btn-secondary" onClick={handlePSNotInterested} disabled={psStatus === 'sending'}>
                         Not right now
                       </button>
-                      <button className="pb-btn pb-btn-primary" onClick={handlePSInterested} disabled={psStatus === 'sending'}>
+                      <button className="pb-btn pb-btn-primary" onClick={handlePSInterested} disabled={psStatus === 'sending' || !psAgreedToTerms}>
                         {psStatus === 'sending' ? 'Sending...' : "I'm interested"}
                       </button>
                     </div>
@@ -3017,7 +3145,15 @@ export default function App() {
                             </span>
                           </div>
                         )}
-                        {c.movieName && (
+                        {isPrivateScreening && c.eventType && (
+                          <div className="pb-stub-row">
+                            <span className="pb-stub-row-label">Event</span>
+                            <span className="pb-stub-row-value">
+                              {c.eventDetail ? `${c.eventType} — ${c.eventDetail}` : c.eventType}
+                            </span>
+                          </div>
+                        )}
+                        {!isPrivateScreening && c.movieName && (
                           <div className="pb-stub-row">
                             <span className="pb-stub-row-label">Movie</span>
                             <span className="pb-stub-row-value">{c.movieName}</span>

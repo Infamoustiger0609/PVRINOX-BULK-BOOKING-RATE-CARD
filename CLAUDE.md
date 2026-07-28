@@ -111,6 +111,13 @@ that ships to the browser.
   `submitLeadToSheet`/`submitPSLeadToSheet` — same payload shape, separate
   destination) so real submissions show up in the dashboard, not just the
   Sheet.
+- `api/leads/[id]/status.js` — `PATCH`, protected. Lead status pipeline:
+  `LEAD_STATUSES` in App.jsx (`['New','Contacted','Negotiating','Won','Lost']`)
+  must stay in sync with the `leads_status_check` CHECK constraint
+  (`supabase/schema.sql`) and `VALID_STATUSES` in this file. The dashboard's
+  status dropdown (row + detail view) updates optimistically via
+  `handleLeadStatusChange` and rolls back `dashboardLeads` if the PATCH fails.
+  New leads default to `'New'` at the DB level (`leads.status default 'New'`).
 
 ### Proforma Invoice (real feature, not a placeholder)
 

@@ -24,11 +24,21 @@ create table if not exists leads (
   email text,
   cinemas jsonb not null default '[]'::jsonb,
   grand_total numeric not null,
+  status text not null default 'New',
   submitted_at timestamptz not null default now()
 );
 
 create index if not exists leads_submitted_at_idx on leads (submitted_at desc);
 create index if not exists leads_grand_total_idx on leads (grand_total desc);
+
+-- Adds `status` to a leads table that already existed before this feature — the
+-- create table above is a no-op in that case, so these run separately and are
+-- safe to re-run (drop-then-add the constraint rather than IF NOT EXISTS, which
+-- Postgres doesn't support for CHECK constraints).
+alter table leads add column if not exists status text not null default 'New';
+alter table leads drop constraint if exists leads_status_check;
+alter table leads add constraint leads_status_check
+  check (status in ('New', 'Contacted', 'Negotiating', 'Won', 'Lost'));
 
 create table if not exists performa_invoices (
   id uuid primary key default gen_random_uuid(),

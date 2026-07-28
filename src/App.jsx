@@ -150,6 +150,15 @@ const FOOD_COMBOS = [
   { id: 'mediumBurger', label: 'Medium Combo + Burger', items: 'Medium pepsi + medium popcorn + burger', price: 850 },
 ];
 
+// Staff dashboard's lead status pipeline — must match the CHECK constraint on
+// the leads table (supabase/schema.sql) and VALID_STATUSES in api/leads/[id]/status.js.
+const LEAD_STATUSES = ['New', 'Contacted', 'Negotiating', 'Won', 'Lost'];
+
+function leadStatusClass(status) {
+  const key = String(status || 'New').toLowerCase();
+  return LEAD_STATUSES.map((s) => s.toLowerCase()).includes(key) ? `pb-status-${key}` : 'pb-status-new';
+}
+
 function generateReferenceId() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let out = 'PVX-';
@@ -876,6 +885,24 @@ export default function App() {
     resetPiEditor();
   }
 
+  async function handleLeadStatusChange(leadId, newStatus) {
+    const previousLeads = dashboardLeads;
+    setDashboardLeads((leads) => leads.map((lead) => (lead.id === leadId ? { ...lead, status: newStatus } : lead)));
+    try {
+      const res = await fetch(`/api/leads/${leadId}/status`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      if (res.status === 401) return handleEmployeeSessionExpired();
+      if (!res.ok) throw new Error('Failed to update status');
+    } catch (err) {
+      console.error(err);
+      setDashboardLeads(previousLeads);
+    }
+  }
+
   async function startPiEditor(lead) {
     resetPiEditor();
     const initialPiData = buildPiDataFromLead(lead);
@@ -1248,24 +1275,9 @@ export default function App() {
       return { ...a, ninetyPercentFloor, rate, requiredTickets, flooredByMinimum, subtotal };
     });
 
-    const cheapestAudiNumber = (() => {
-      const valid = rawAudiOptions.filter((a) => !a.disabled && a.subtotal != null);
-      if (!valid.length) return null;
-      const allSame = valid.every((a) => a.subtotal === valid[0].subtotal);
-      if (allSame) return null;
-      return valid.reduce((best, a) => (a.subtotal < best.subtotal ? a : best), valid[0]).audi;
-    })();
-
-    // Cheapest-and-valid first; disabled ones always sink to the bottom regardless of price.
-    const audiOptions =
-      desiredAttendees > 0
-        ? rawAudiOptions.slice().sort((a, b) => {
-            if (a.disabled !== b.disabled) return a.disabled ? 1 : -1;
-            const aVal = a.subtotal == null ? Infinity : a.subtotal;
-            const bVal = b.subtotal == null ? Infinity : b.subtotal;
-            return aVal - bVal;
-          })
-        : rawAudiOptions;
+    // Keep the picker in the same audi-number order as private_screening_data.json —
+    // no price-based reordering, so an audi's position never drifts from its actual number.
+    const audiOptions = rawAudiOptions;
 
     const selectedAudis = rawAudiOptions.filter((a) => detail.selectedAudiNumbers.includes(a.audi));
 
@@ -1281,7 +1293,6 @@ export default function App() {
       desiredAttendees,
       audis,
       audiOptions,
-      cheapestAudiNumber,
       selectedAudis,
       combinedCapacity,
       activeTimeSlot,
@@ -2067,7 +2078,7 @@ export default function App() {
         .pb-dash-empty { color: var(--ink-muted); font-size: 13.5px; padding: 24px; text-align: center; }
         .pb-dash-row {
           display: grid;
-          grid-template-columns: 110px 130px 1fr 190px 120px;
+          grid-template-columns: 110px 130px 1fr 190px 120px 150px;
           align-items: center;
           gap: 14px;
           background: var(--surface);
@@ -2095,6 +2106,40 @@ export default function App() {
         .pb-dash-row-name { font-size: 13.5px; color: var(--ink); font-weight: 600; }
         .pb-dash-row-date { font-size: 12px; color: var(--ink-muted); }
         .pb-dash-row-total { font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 700; color: var(--ink); text-align: right; }
+
+        .pb-status-select {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 10.5px;
+          font-weight: 700;
+          letter-spacing: 0.03em;
+          text-transform: uppercase;
+          padding: 5px 8px;
+          border-radius: 999px;
+          cursor: pointer;
+          outline: none;
+          width: 100%;
+        }
+        .pb-status-new { background: rgba(171, 159, 152, 0.15); color: var(--ink-muted); border: 1px solid rgba(171, 159, 152, 0.35); }
+        .pb-status-contacted { background: rgba(96, 165, 250, 0.15); color: #93c5fd; border: 1px solid rgba(96, 165, 250, 0.35); }
+        .pb-status-negotiating { background: rgba(231, 178, 61, 0.15); color: var(--gold); border: 1px solid rgba(231, 178, 61, 0.35); }
+        .pb-status-won { background: rgba(74, 222, 128, 0.15); color: #86efac; border: 1px solid rgba(74, 222, 128, 0.35); }
+        .pb-status-lost { background: rgba(209, 39, 46, 0.15); color: var(--red); border: 1px solid rgba(209, 39, 46, 0.35); }
+        .pb-status-select option { background: var(--surface); color: var(--ink); }
+
+        .pb-dash-detail-status {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin: 4px 0 16px;
+        }
+        .pb-dash-detail-status label {
+          font-size: 11px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          color: var(--ink-muted);
+        }
+        .pb-dash-detail-status .pb-status-select { width: auto; padding: 6px 12px; }
 
         .pb-dash-detail { max-width: 480px; margin: 0 auto; }
 
@@ -2221,13 +2266,15 @@ export default function App() {
         @media (max-width: 640px) {
           .pb-dash-row {
             grid-template-columns: 1fr 1fr;
-            grid-template-areas: "ref badge" "name name" "date total";
+            grid-template-areas: "ref badge" "name name" "date total" "status status";
           }
           .pb-dash-row-ref { grid-area: ref; }
           .pb-dash-badge { grid-area: badge; justify-self: start; }
           .pb-dash-row-name { grid-area: name; }
           .pb-dash-row-date { grid-area: date; }
           .pb-dash-row-total { grid-area: total; }
+          .pb-dash-row-status { grid-area: status; }
+          .pb-dash-row-status .pb-status-select { width: 100%; }
           .pb-pi-grid-2, .pb-pi-grid-3 { grid-template-columns: 1fr; }
           .pb-pi-table-header, .pb-pi-table-row { grid-template-columns: 1fr 50px 65px 75px 20px; font-size: 11px; }
           .pb-pi-total-row { grid-template-columns: 1fr 110px auto; }
@@ -2568,18 +2615,6 @@ export default function App() {
           margin-bottom: 4px;
         }
         .pb-audi-name { font-size: 13.5px; font-weight: 700; color: var(--ink); }
-        .pb-audi-badge {
-          font-family: 'IBM Plex Mono', monospace;
-          font-size: 9.5px;
-          font-weight: 700;
-          letter-spacing: 0.06em;
-          text-transform: uppercase;
-          color: var(--bg);
-          background: var(--gold);
-          padding: 2px 6px;
-          border-radius: 999px;
-          white-space: nowrap;
-        }
         .pb-audi-capacity { font-size: 12px; color: var(--ink-muted); margin-bottom: 2px; }
         .pb-audi-rate { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-muted); margin-bottom: 6px; }
         .pb-audi-required {
@@ -3043,6 +3078,19 @@ export default function App() {
                       <span className="pb-dash-row-name">{lead.customerName}</span>
                       <span className="pb-dash-row-date">{formatSubmittedOn(lead.submittedAt)}</span>
                       <span className="pb-dash-row-total">{formatINR(lead.grandTotal)}</span>
+                      <span className="pb-dash-row-status" onClick={(e) => e.stopPropagation()}>
+                        <select
+                          className={'pb-status-select ' + leadStatusClass(lead.status)}
+                          value={lead.status || 'New'}
+                          onChange={(e) => handleLeadStatusChange(lead.id, e.target.value)}
+                        >
+                          {LEAD_STATUSES.map((s) => (
+                            <option key={s} value={s}>
+                              {s}
+                            </option>
+                          ))}
+                        </select>
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -3054,6 +3102,22 @@ export default function App() {
                 <button type="button" className="pb-mode-back" onClick={closeLeadDetail}>
                   &larr; Back to all leads
                 </button>
+
+                <div className="pb-dash-detail-status">
+                  <label htmlFor="lead-status-select">Lead status</label>
+                  <select
+                    id="lead-status-select"
+                    className={'pb-status-select ' + leadStatusClass(selectedLead.status)}
+                    value={selectedLead.status || 'New'}
+                    onChange={(e) => handleLeadStatusChange(selectedLead.id, e.target.value)}
+                  >
+                    {LEAD_STATUSES.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
                 <div className="pb-stub">
                   <div className="pb-stub-top">
@@ -4375,9 +4439,6 @@ export default function App() {
                                     >
                                       <div className="pb-audi-card-head">
                                         <span className="pb-audi-name">Audi {a.audi} &middot; {a.format}</span>
-                                        {r.desiredAttendees > 0 && a.audi === r.cheapestAudiNumber && (
-                                          <span className="pb-audi-badge">Cheapest</span>
-                                        )}
                                       </div>
                                       <div className="pb-audi-capacity">{a.capacity} seats</div>
                                       <div className="pb-audi-rate">{formatINR(a.rate)}/ticket</div>

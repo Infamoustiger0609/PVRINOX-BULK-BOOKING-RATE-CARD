@@ -1,7 +1,8 @@
 import { supabaseAdmin } from '../_lib/supabaseAdmin.js';
 import { requireSession } from '../_lib/auth.js';
 
-const LEAD_COLUMNS = 'id, reference_id, booking_type, customer_name, phone, email, cinemas, grand_total, submitted_at';
+const LEAD_COLUMNS =
+  'id, reference_id, booking_type, customer_name, phone, email, cinemas, grand_total, status, submitted_at';
 
 function toCamelLead(row) {
   return {
@@ -13,6 +14,7 @@ function toCamelLead(row) {
     email: row.email,
     cinemas: row.cinemas,
     grandTotal: Number(row.grand_total),
+    status: row.status,
     submittedAt: row.submitted_at,
   };
 }

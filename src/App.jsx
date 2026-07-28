@@ -1245,6 +1245,8 @@ export default function App() {
     const cheapestAudiNumber = (() => {
       const valid = rawAudiOptions.filter((a) => !a.disabled && a.subtotal != null);
       if (!valid.length) return null;
+      const allSame = valid.every((a) => a.subtotal === valid[0].subtotal);
+      if (allSame) return null;
       return valid.reduce((best, a) => (a.subtotal < best.subtotal ? a : best), valid[0]).audi;
     })();
 
@@ -1299,10 +1301,12 @@ export default function App() {
   const psGrandTotal = computedPSCinemas.reduce((sum, r) => sum + r.lineTotal, 0);
 
   function toggleCity(city) {
+    if (status !== 'form') setStatus('form');
     setSelectedCities((cities) => (cities.includes(city) ? cities.filter((c) => c !== city) : [...cities, city]));
   }
 
   function toggleDelhiNCR() {
+    if (status !== 'form') setStatus('form');
     setSelectedCities((cities) => {
       const allSelected = BULK_NCR_CITIES.every((c) => cities.includes(c));
       if (allSelected) return cities.filter((c) => !BULK_NCR_CITIES.includes(c));
@@ -1311,10 +1315,12 @@ export default function App() {
   }
 
   function togglePSCity(city) {
+    if (psStatus !== 'form') setPSStatus('form');
     setPSSelectedCities((cities) => (cities.includes(city) ? cities.filter((c) => c !== city) : [...cities, city]));
   }
 
   function togglePSDelhiNCR() {
+    if (psStatus !== 'form') setPSStatus('form');
     setPSSelectedCities((cities) => {
       const allSelected = psNcrCities.every((c) => cities.includes(c));
       if (allSelected) return cities.filter((c) => !psNcrCities.includes(c));
@@ -1327,6 +1333,7 @@ export default function App() {
   }
 
   function togglePSCinemaSelection(cinemaName) {
+    if (psStatus !== 'form') setPSStatus('form');
     if (psSelectedCinemaNames.includes(cinemaName)) {
       setPSSelectedCinemaNames((names) => names.filter((n) => n !== cinemaName));
       setPSCinemaDetails((details) => {
@@ -1447,6 +1454,7 @@ export default function App() {
   }
 
   function toggleCinemaSelection(cinemaName) {
+    if (status !== 'form') setStatus('form');
     if (selectedCinemaNames.includes(cinemaName)) {
       setSelectedCinemaNames((names) => names.filter((n) => n !== cinemaName));
       setCinemaDetails((details) => {
@@ -1896,7 +1904,7 @@ export default function App() {
           transition: opacity 0.15s;
         }
         .pb-brand-logo:hover { opacity: 0.8; }
-        .pb-brand-logo-img { display: block; height: 32px; width: auto; border-radius: 4px; }
+        .pb-brand-logo-img { display: block; height: 48px; width: auto; }
         .pb-lookup-trigger {
           background: transparent;
           border: 1px solid var(--line);
@@ -2805,7 +2813,7 @@ export default function App() {
           .pb-card { padding: 16px; }
 
           .pb-top-bar { justify-content: space-between; margin-bottom: 14px; }
-          .pb-brand-logo-img { height: 24px; }
+          .pb-brand-logo-img { height: 36px; }
           .pb-lookup-trigger { width: auto; padding: 8px 14px; font-size: 12px; min-height: 40px; }
 
           .pb-title { font-size: clamp(26px, 8vw, 34px); letter-spacing: 0.01em; }

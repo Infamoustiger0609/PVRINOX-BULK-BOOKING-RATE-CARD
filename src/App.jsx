@@ -683,7 +683,9 @@ export default function App() {
         ['Request date', r.requestDate],
         ['Attendees', String(r.desiredAttendees)],
         ['Tickets required', `${r.selectedAudi.requiredTickets} × ${formatINRForPdf(r.selectedAudi.rate)}`],
-        ['Food', r.activeCombo ? r.activeCombo.label : 'None'],
+        ['Food', r.activeCombo && r.activeCombo.id !== 'none'
+          ? `${r.activeCombo.label} (${r.desiredAttendees} × ${formatINRForPdf(r.activeCombo.price)})`
+          : 'None'],
         ...(r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier
           ? [['Price adjustment', formatSurgeNote(r.dateAdjustment)]]
           : []),
@@ -834,7 +836,9 @@ export default function App() {
           (r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier
             ? '   Price adjustment: ' + formatSurgeNote(r.dateAdjustment) + '\n'
             : '') +
-          '   Food: ' + (r.activeCombo ? r.activeCombo.label : 'None') + ' x ' + r.desiredAttendees + ' = ' + (r.foodSubtotal ? formatINR(r.foodSubtotal) : 'None') + '\n' +
+          '   Food: ' + (r.activeCombo && r.activeCombo.id !== 'none'
+            ? `${r.activeCombo.label} (${r.desiredAttendees} × ${formatINR(r.activeCombo.price)}) = ${formatINR(r.foodSubtotal)}`
+            : 'None') + '\n' +
           '   Subtotal: ' + formatINR(r.lineTotal)
         );
       })
@@ -2833,7 +2837,11 @@ export default function App() {
                         </div>
                       )}
                       <div className="pb-stub-row">
-                        <span className="pb-stub-row-label">Food ({r.activeCombo.label})</span>
+                        <span className="pb-stub-row-label">
+                          {r.activeCombo && r.activeCombo.id !== 'none' && r.desiredAttendees > 0
+                            ? `Food (${r.activeCombo.label}) (${r.desiredAttendees} × ${formatINR(r.activeCombo.price)})`
+                            : `Food (${r.activeCombo.label})`}
+                        </span>
                         <span className="pb-stub-row-value">{r.foodSubtotal ? formatINR(r.foodSubtotal) : '—'}</span>
                       </div>
                       {computedPSCinemas.length > 1 && (

@@ -139,7 +139,21 @@ const EVENT_TYPES = [
   'School & Community Events',
   'Sports & Gaming',
   'Filmmaker & Premieres',
+  'Pre-Screening',
   'Other',
+];
+
+// Landing page's "Events" shortcut grid — each entry deep-links into Private
+// Screening with its eventType pre-filled (see pendingEventType in App()).
+const EVENT_QUICK_PICKS = [
+  { label: 'Birthday', eventType: 'Birthday Party' },
+  { label: 'Anniversary', eventType: 'Anniversary' },
+  { label: 'Pre Wedding', eventType: 'Pre-Wedding Screening' },
+  { label: 'Product Launch', eventType: 'Brand Activations & Launches' },
+  { label: 'Pre Screening', eventType: 'Pre-Screening' },
+  { label: 'Photoshoot', eventType: 'Photo Shoot' },
+  { label: 'Premier', eventType: 'Filmmaker & Premieres' },
+  { label: 'Corporate Event', eventType: 'Corporate Events' },
 ];
 
 const FOOD_COMBOS = [
@@ -691,7 +705,8 @@ async function buildPIPdf(piData) {
 }
 
 export default function App() {
-  const [mode, setMode] = useState(null); // null | 'bulkBooking' | 'privateScreening' | 'employeeLogin' | 'dashboard'
+  const [mode, setMode] = useState(null); // null | 'bulkBooking' | 'privateScreening' | 'events' | 'employeeLogin' | 'dashboard'
+  const [pendingEventType, setPendingEventType] = useState('');
 
   // ---- Employee Dashboard: backed by /api/auth/* + /api/leads/* (Supabase + JWT cookie) ----
   const [isEmployeeLoggedIn, setIsEmployeeLoggedIn] = useState(false);
@@ -1368,7 +1383,7 @@ export default function App() {
           desiredAttendeesInput: '',
           selectedAudiNumbers: [],
           requestDate: '',
-          eventType: '',
+          eventType: pendingEventType || '',
           eventDetail: '',
           eventTypeQuery: '',
           eventTypeDropdownOpen: false,
@@ -1998,6 +2013,13 @@ export default function App() {
           grid-template-columns: 1fr 1fr;
           gap: 20px;
         }
+        .pb-events-grid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 16px;
+        }
+        .pb-events-option { padding: 22px 16px; text-align: center; }
+        .pb-events-option .pb-landing-option-title { margin: 0; font-size: 20px; }
         .pb-landing-option {
           background: var(--surface);
           border: 1px solid var(--line);
@@ -2032,6 +2054,7 @@ export default function App() {
         @media (max-width: 640px) {
           .pb-landing { padding: 20px 0; }
           .pb-landing-options { grid-template-columns: 1fr; }
+          .pb-events-grid { grid-template-columns: 1fr 1fr; }
         }
 
         .pb-employee-link-wrap { margin-top: 28px; text-align: center; }
@@ -2940,6 +2963,13 @@ export default function App() {
                 </p>
                 <span className="pb-landing-option-cta">Get a private screening quote &rarr;</span>
               </div>
+              <div className="pb-landing-option" onClick={() => setMode('events')}>
+                <h2 className="pb-landing-option-title">Events</h2>
+                <p className="pb-landing-option-desc">
+                  Book a private screening for a specific occasion — pick from birthday, anniversary, corporate, and more.
+                </p>
+                <span className="pb-landing-option-cta">Browse event types &rarr;</span>
+              </div>
             </div>
 
             <div className="pb-employee-link-wrap">
@@ -2950,6 +2980,33 @@ export default function App() {
               >
                 Employee Login
               </button>
+            </div>
+          </div>
+        )}
+
+        {mode === 'events' && (
+          <div className="pb-landing">
+            <button type="button" className="pb-mode-back" onClick={() => setMode(null)}>
+              &larr; Back
+            </button>
+            <p className="pb-landing-eyebrow">PVR INOX Group &amp; Private Bookings</p>
+            <h1 className="pb-landing-title">What&apos;s the <span>occasion</span>?</h1>
+            <p className="pb-landing-subtitle">
+              Pick the closest match — you'll land in Private Screening with the event type already filled in.
+            </p>
+            <div className="pb-events-grid">
+              {EVENT_QUICK_PICKS.map((pick) => (
+                <div
+                  key={pick.label}
+                  className="pb-landing-option pb-events-option"
+                  onClick={() => {
+                    setPendingEventType(pick.eventType);
+                    setMode('privateScreening');
+                  }}
+                >
+                  <h2 className="pb-landing-option-title">{pick.label}</h2>
+                </div>
+              ))}
             </div>
           </div>
         )}

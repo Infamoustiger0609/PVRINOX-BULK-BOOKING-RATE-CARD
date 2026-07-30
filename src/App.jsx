@@ -146,14 +146,46 @@ const EVENT_TYPES = [
 // Landing page's "Events" shortcut grid — each entry deep-links into Private
 // Screening with its eventType pre-filled (see pendingEventType in App()).
 const EVENT_QUICK_PICKS = [
-  { label: 'Birthday', eventType: 'Birthday Party' },
-  { label: 'Anniversary', eventType: 'Anniversary' },
-  { label: 'Pre Wedding', eventType: 'Pre-Wedding Screening' },
-  { label: 'Product Launch', eventType: 'Brand Activations & Launches' },
-  { label: 'Pre Screening', eventType: 'Pre-Screening' },
-  { label: 'Photoshoot', eventType: 'Photo Shoot' },
-  { label: 'Premier', eventType: 'Filmmaker & Premieres' },
-  { label: 'Corporate Event', eventType: 'Corporate Events' },
+  {
+    label: 'Birthday',
+    eventType: 'Birthday Party',
+    desc: 'Celebrate a birthday with a private screen for family and friends.',
+  },
+  {
+    label: 'Anniversary',
+    eventType: 'Anniversary',
+    desc: 'Mark the occasion with a private screening for your anniversary.',
+  },
+  {
+    label: 'Pre Wedding',
+    eventType: 'Pre-Wedding Screening',
+    desc: 'A private screen for pre-wedding celebrations and shoots.',
+  },
+  {
+    label: 'Product Launch',
+    eventType: 'Brand Activations & Launches',
+    desc: 'Unveil your product to press, partners, or your team in a private audi.',
+  },
+  {
+    label: 'Pre Screening',
+    eventType: 'Pre-Screening',
+    desc: 'Host an exclusive early screening before public release.',
+  },
+  {
+    label: 'Photoshoot',
+    eventType: 'Photo Shoot',
+    desc: 'Rent a private audi as a shoot location for your photography.',
+  },
+  {
+    label: 'Premier',
+    eventType: 'Filmmaker & Premieres',
+    desc: 'Host a premiere screening for your film or project.',
+  },
+  {
+    label: 'Corporate Event',
+    eventType: 'Corporate Events',
+    desc: 'A private venue for meetings, offsites, or team events.',
+  },
 ];
 
 const FOOD_COMBOS = [
@@ -1983,7 +2015,7 @@ export default function App() {
         }
         .pb-mode-back:hover { color: var(--gold); }
 
-        .pb-landing { max-width: 760px; margin: 0 auto; text-align: center; padding: 40px 0; }
+        .pb-landing { max-width: 1100px; margin: 0 auto; text-align: center; padding: 40px 0; }
         .pb-landing-eyebrow {
           font-family: 'IBM Plex Mono', monospace;
           font-size: 11px;
@@ -2010,7 +2042,7 @@ export default function App() {
         }
         .pb-landing-options {
           display: grid;
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: 1fr 1fr 1fr;
           gap: 20px;
         }
         .pb-events-grid {
@@ -2019,12 +2051,18 @@ export default function App() {
           gap: 16px;
         }
         .pb-events-option { padding: 22px 16px; text-align: center; }
-        .pb-events-option .pb-landing-option-title { margin: 0; font-size: 20px; }
+        .pb-events-option .pb-landing-option-title { margin: 0 0 8px; font-size: 20px; }
+        .pb-events-option-desc {
+          color: var(--ink-muted);
+          font-size: 13.5px;
+          line-height: 1.5;
+          margin: 0;
+        }
         .pb-landing-option {
           background: var(--surface);
           border: 1px solid var(--line);
           border-radius: 14px;
-          padding: 32px 24px;
+          padding: 28px 20px;
           text-align: left;
           cursor: pointer;
           transition: border-color 0.15s, transform 0.15s;
@@ -3005,6 +3043,7 @@ export default function App() {
                   }}
                 >
                   <h2 className="pb-landing-option-title">{pick.label}</h2>
+                  <p className="pb-events-option-desc">{pick.desc}</p>
                 </div>
               ))}
             </div>

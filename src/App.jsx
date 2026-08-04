@@ -32,43 +32,12 @@ const APPS_SCRIPT_URL =
 // the header and embedded into both the quote PDF and the Proforma Invoice PDF.
 const PVR_INOX_LOGO_URL = '/assests/pvr-inox-logo.png';
 
-// Manual city overrides for cinema names where the naive "last word" rule doesn't match the real city
-const CITY_OVERRIDES = {
-  'PVR City Mall Yamuna Nagar': 'Yamuna Nagar',
-};
-
 // Some source data spells the same city more than one way — normalize at the point
 // city lists are derived (not by editing the underlying data) so cinemas from either
 // spelling surface under a single merged option.
 const CITY_NAME_ALIASES = { Gurugram: 'Gurgaon', Ahemdabad: 'Ahmedabad' };
 function normalizeCityName(city) {
   return CITY_NAME_ALIASES[city] || city;
-}
-
-// Bulk Booking and Private Screening name the same physical format differently
-// ('LUXE & INSIGNIA' vs 'GOLD/LUXE/INSIGNIA', etc.) — used by Bulk Booking's
-// audi-capacity lookup to resolve a bulk format string to its PS equivalent.
-const BULK_TO_PS_FORMAT_ALIASES = {
-  '4DX & MX4D': '4DX',
-  'DIRECTORS CUT': "Director's Cut",
-  'Drive In': 'Drive In',
-  'ICE': 'ICE',
-  'IMAX': 'IMAX',
-  'LUXE & INSIGNIA': 'GOLD/LUXE/INSIGNIA',
-  'Mainstream': 'Mainstream',
-  'ONYX': 'ONYX',
-  'P[XL] & BIGPIX': 'PXL',
-  'Playhouse & Kiddles': 'Playhouse',
-  'SCREEN X': 'Screen X',
-  // 'Club', 'LIBRARY HALL', 'LIVING ROOM', 'Sapphire', 'THE LOFT' have no
-  // private-screening equivalent — intentionally omitted, capacity just won't show
-};
-
-function getCityForCinema(name) {
-  if (CITY_OVERRIDES[name]) return normalizeCityName(CITY_OVERRIDES[name]);
-  if (name.includes('Pitampura')) return normalizeCityName('Delhi');
-  const words = name.trim().split(/\s+/);
-  return normalizeCityName(words[words.length - 1]);
 }
 
 // "Delhi NCR" quick-select in the city dropdown expands to this set — edit here to change it
@@ -82,10 +51,9 @@ function getCityForPSCinema(dataset, name) {
   return normalizeCityName(toTitleCase(dataset[name]?.city || ''));
 }
 
-// Shared by bulk booking (bulkBookingData, city derived from the cinema name) and private
-// screening (privateScreeningData, city read from an explicit field) — both datasets are
-// fetched at runtime; each supplies its own getCityFn so this just handles building +
-// de-duping + sorting once.
+// Shared by both flows — Bulk Booking and Private Screening both read from
+// privateScreeningData now (same dataset, same getCityForPSCinema), so this just
+// handles building + de-duping + sorting the cinema/city lists once per call site.
 function buildCinemaAndCityLists(dataset, getCityFn) {
   const cinemaNames = Object.keys(dataset);
   const allCities = Array.from(new Set(cinemaNames.map(getCityFn))).sort((a, b) => a.localeCompare(b));
@@ -1106,35 +1074,9 @@ export default function App() {
   const [lookupStatus, setLookupStatus] = useState('idle'); // idle | loading | found | not-found | error
   const [lookupResult, setLookupResult] = useState(null);
 
-  // ---- Bulk Booking: data is fetched at runtime (not bundled), only once the flow is entered ----
-  const [bulkBookingData, setBulkBookingData] = useState(null);
-  const [bulkDataError, setBulkDataError] = useState(false);
-
-  function fetchBulkBookingData() {
-    setBulkDataError(false);
-    fetch('/data/bulk_booking_data.json')
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to load bulk booking data');
-        return res.json();
-      })
-      .then(setBulkBookingData)
-      .catch(() => setBulkDataError(true));
-  }
-
-  useEffect(() => {
-    if (mode !== 'bulkBooking' || bulkBookingData) return;
-    fetchBulkBookingData();
-  }, [mode, bulkBookingData]);
-
-  const { cinemaNames: CINEMA_NAMES, allCities: ALL_CITIES } = useMemo(() => {
-    if (!bulkBookingData) return { cinemaNames: [], allCities: [] };
-    return buildCinemaAndCityLists(bulkBookingData, getCityForCinema);
-  }, [bulkBookingData]);
-  // NCR_CITIES also covers private screening's city spellings ("New Delhi", "Greater Noida"), which
-  // never occur in the bulk-booking dataset — scope the "Delhi NCR" shortcut to what's actually selectable here.
-  const BULK_NCR_CITIES = useMemo(() => NCR_CITIES.filter((c) => ALL_CITIES.includes(c)), [ALL_CITIES]);
-
-  // ---- Private Screening: data is fetched at runtime (not bundled), only once the flow is entered ----
+  // ---- Private Screening: data is fetched at runtime (not bundled), only once either
+  // flow is entered. Bulk Booking reads from this same dataset (see CINEMA_NAMES/
+  // ALL_CITIES/bulkFormatsByCinema below) rather than a separate bulk-only file.
   const [privateScreeningData, setPrivateScreeningData] = useState(null);
   const [dataError, setDataError] = useState(false);
 
@@ -1154,21 +1096,43 @@ export default function App() {
     fetchPrivateScreeningData();
   }, [mode, privateScreeningData]);
 
-  // Flat { bulkCinemaName: psCinemaName } cross-reference — the two datasets name the
-  // same physical cinema differently, so Bulk Booking's audi-capacity lookup (below)
-  // needs this to find the matching Private Screening entry. Non-critical: if it fails
-  // to load, capacity info just doesn't show, same as an unmapped cinema.
-  const [privateScreeningCinemaMap, setPrivateScreeningCinemaMap] = useState(null);
+  // Bulk Booking's own city/cinema lists — same source and same getCityFn as Private
+  // Screening's PS_CINEMA_NAMES/PS_ALL_CITIES below, so the two pickers behave identically.
+  const { cinemaNames: CINEMA_NAMES, allCities: ALL_CITIES } = useMemo(() => {
+    if (!privateScreeningData) return { cinemaNames: [], allCities: [] };
+    return buildCinemaAndCityLists(privateScreeningData, (name) => getCityForPSCinema(privateScreeningData, name));
+  }, [privateScreeningData]);
+  const BULK_NCR_CITIES = useMemo(() => NCR_CITIES.filter((c) => ALL_CITIES.includes(c)), [ALL_CITIES]);
 
-  useEffect(() => {
-    if ((mode !== 'privateScreening' && mode !== 'bulkBooking') || privateScreeningCinemaMap) return;
-    fetch('/data/cinema_name_map.json')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data) setPrivateScreeningCinemaMap(data);
-      })
-      .catch(() => {});
-  }, [mode, privateScreeningCinemaMap]);
+  // Groups each cinema's Private Screening audis by format for Bulk Booking's format
+  // pills — same format/morning/afternoon/evening rate fields the old bulk-only dataset
+  // had, plus `audis` (purely informational per-audi capacity, no selection/booking tied
+  // to it). All audis sharing a format at a cinema share the same rate, so morning/
+  // afternoon/evening are taken from the first audi in each group.
+  const bulkFormatsByCinema = useMemo(() => {
+    if (!privateScreeningData) return {};
+    const result = {};
+    Object.keys(privateScreeningData).forEach((cinemaName) => {
+      const audis = privateScreeningData[cinemaName]?.audis || [];
+      const byFormat = {};
+      audis.forEach((a) => {
+        if (!byFormat[a.format]) byFormat[a.format] = [];
+        byFormat[a.format].push(a);
+      });
+      result[cinemaName] = Object.keys(byFormat).map((format) => {
+        const group = byFormat[format].slice().sort((a, b) => a.audi - b.audi);
+        const first = group[0];
+        return {
+          format,
+          morning: first.morning,
+          afternoon: first.afternoon,
+          evening: first.evening,
+          audis: group.map((a) => ({ audi: a.audi, capacity: a.capacity })),
+        };
+      });
+    });
+    return result;
+  }, [privateScreeningData]);
 
   const [psShowCityDropdown, setPSShowCityDropdown] = useState(false);
   const [psSelectedCities, setPSSelectedCities] = useState([]);
@@ -1193,27 +1157,6 @@ export default function App() {
   const { cinemaNames: PS_CINEMA_NAMES, allCities: PS_ALL_CITIES } = useMemo(() => {
     if (!privateScreeningData) return { cinemaNames: [], allCities: [] };
     return buildCinemaAndCityLists(privateScreeningData, (name) => getCityForPSCinema(privateScreeningData, name));
-  }, [privateScreeningData]);
-
-  // Purely informational cross-reference for Bulk Booking's format pills — cinemaName ->
-  // format -> [{ audi, capacity }], sourced from the Private Screening dataset's per-audi
-  // rows since Bulk Booking's own data has no audi-level breakdown.
-  const audiCapacityLookup = useMemo(() => {
-    if (!privateScreeningData) return {};
-    const lookup = {};
-    Object.keys(privateScreeningData).forEach((cinemaName) => {
-      const audis = privateScreeningData[cinemaName]?.audis || [];
-      const byFormat = {};
-      audis.forEach((a) => {
-        if (!byFormat[a.format]) byFormat[a.format] = [];
-        byFormat[a.format].push({ audi: a.audi, capacity: a.capacity });
-      });
-      Object.keys(byFormat).forEach((format) => {
-        byFormat[format].sort((a, b) => a.audi - b.audi);
-      });
-      lookup[cinemaName] = byFormat;
-    });
-    return lookup;
   }, [privateScreeningData]);
 
   const psNcrCities = useMemo(() => NCR_CITIES.filter((c) => PS_ALL_CITIES.includes(c)), [PS_ALL_CITIES]);
@@ -1260,9 +1203,12 @@ export default function App() {
   const isNcrSelected = BULK_NCR_CITIES.every((c) => selectedCities.includes(c));
 
   const cityFilteredCinemaNames = useMemo(() => {
-    const pool = selectedCities.length === 0 ? CINEMA_NAMES : CINEMA_NAMES.filter((c) => selectedCities.includes(getCityForCinema(c)));
+    const pool =
+      selectedCities.length === 0
+        ? CINEMA_NAMES
+        : CINEMA_NAMES.filter((c) => selectedCities.includes(getCityForPSCinema(privateScreeningData || {}, c)));
     return pool.slice().sort((a, b) => a.localeCompare(b));
-  }, [CINEMA_NAMES, selectedCities]);
+  }, [CINEMA_NAMES, selectedCities, privateScreeningData]);
 
   // Dropping a city (chip remove, "Clear all", NCR toggle-off) should immediately drop
   // any already-selected cinemas that no longer belong to a selected city — not just
@@ -1272,15 +1218,16 @@ export default function App() {
   // there's no interaction with the separate "no city filter shows every cinema in
   // the picker" browsing behavior.
   useEffect(() => {
-    setSelectedCinemaNames((names) => names.filter((n) => selectedCities.includes(getCityForCinema(n))));
+    if (!privateScreeningData) return;
+    setSelectedCinemaNames((names) => names.filter((n) => selectedCities.includes(getCityForPSCinema(privateScreeningData, n))));
     setCinemaDetails((details) => {
       const next = {};
       Object.keys(details).forEach((n) => {
-        if (selectedCities.includes(getCityForCinema(n))) next[n] = details[n];
+        if (selectedCities.includes(getCityForPSCinema(privateScreeningData, n))) next[n] = details[n];
       });
       return next;
     });
-  }, [selectedCities]);
+  }, [selectedCities, privateScreeningData]);
 
   const cityQueryTrimmed = cityQuery.trim().toLowerCase();
   const showAllCitiesOption = cityQueryTrimmed === '';
@@ -1306,7 +1253,7 @@ export default function App() {
       foodDropdownOpen: false,
       timeSlotDropdownOpen: false,
     };
-    const availableFormats = (bulkBookingData && bulkBookingData[cinemaName]) || [];
+    const availableFormats = bulkFormatsByCinema[cinemaName] || [];
     const activeFormat = availableFormats.find((f) => f.format === detail.format);
     const activeTimeSlot = TIME_SLOTS.find((t) => t.id === detail.timeSlotId) || null;
     const basePrice = activeFormat && detail.timeSlotId ? activeFormat[detail.timeSlotId] : null;
@@ -1587,7 +1534,7 @@ export default function App() {
         return next;
       });
     } else {
-      const formats = (bulkBookingData && bulkBookingData[cinemaName]) || [];
+      const formats = bulkFormatsByCinema[cinemaName] || [];
       setSelectedCinemaNames((names) => [...names, cinemaName]);
       setCinemaDetails((details) => ({
         ...details,
@@ -1911,7 +1858,7 @@ export default function App() {
 
   function downloadQuotePdf() {
     const cinemaSections = completeCinemas.map((r) => ({
-      heading: `${r.cinemaName} — ${getCityForCinema(r.cinemaName)}`,
+      heading: `${r.cinemaName} — ${getCityForPSCinema(privateScreeningData, r.cinemaName)}`,
       rows: [
         ['Format', r.format],
         ['Time slot', `${r.activeTimeSlot.label} (${r.activeTimeSlot.range})`],
@@ -3672,22 +3619,22 @@ export default function App() {
               </p>
             </div>
 
-            {!bulkBookingData && !bulkDataError && (
+            {!privateScreeningData && !dataError && (
               <div className="pb-empty-stub">Loading cinemas&hellip;</div>
             )}
 
-            {bulkDataError && (
+            {dataError && (
               <div className="pb-empty-stub">
                 Couldn&apos;t load bulk booking cinemas — please check your connection and try again.
                 <div style={{ marginTop: 14 }}>
-                  <button type="button" className="pb-btn pb-btn-primary" style={{ flex: 'none', padding: '9px 20px' }} onClick={fetchBulkBookingData}>
+                  <button type="button" className="pb-btn pb-btn-primary" style={{ flex: 'none', padding: '9px 20px' }} onClick={fetchPrivateScreeningData}>
                     Retry
                   </button>
                 </div>
               </div>
             )}
 
-            {bulkBookingData && (
+            {privateScreeningData && (
             /* FORM */
             <div className="pb-card">
                 <div className="pb-field">
@@ -3840,11 +3787,7 @@ export default function App() {
   
                         <div className="pb-pill-row" style={{ marginBottom: 14 }}>
                           {r.availableFormats.map((f) => {
-                            const psCinemaName = privateScreeningCinemaMap?.[r.cinemaName];
-                            const psFormat = BULK_TO_PS_FORMAT_ALIASES[f.format];
-                            const audiCapacities =
-                              psCinemaName && psFormat ? audiCapacityLookup[psCinemaName]?.[psFormat] : null;
-                            const hasAudiCapacities = Array.isArray(audiCapacities) && audiCapacities.length > 0;
+                            const hasAudiCapacities = Array.isArray(f.audis) && f.audis.length > 0;
                             return (
                               <div
                                 key={f.format}
@@ -3864,7 +3807,7 @@ export default function App() {
                                   )}
                                 </div>
                                 {hasAudiCapacities &&
-                                  audiCapacities.map((a) => (
+                                  f.audis.map((a) => (
                                     <div key={a.audi} className="pb-audi-capacity">
                                       Audi {a.audi} — {a.capacity} seats
                                     </div>

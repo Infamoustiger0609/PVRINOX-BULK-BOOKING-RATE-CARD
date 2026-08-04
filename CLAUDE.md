@@ -34,23 +34,37 @@ touch the other unless explicitly asked.
 
 ## Pricing data — fetched at runtime, not hardcoded
 
-Both `CINEMA_DATA`-equivalents were refactored out of the bundle. Do not
+The `CINEMA_DATA`-equivalent was refactored out of the bundle. Do not
 reintroduce inline data literals.
 
-- `public/data/bulk_booking_data.json` → fetched into `bulkBookingData`
-  state (`fetchBulkBookingData`, `App.jsx:300`), only once `mode ===
-  'bulkBooking'`.
-- `public/data/private_screening_data.json` → fetched into
-  `privateScreeningData` state (`fetchPrivateScreeningData`, `:328`).
-- Both have a loading state + `*DataError` state + inline "Retry" button.
-  `CINEMA_NAMES`/`ALL_CITIES` (bulk) and `PS_CINEMA_NAMES`/`PS_ALL_CITIES`
-  (private) are `useMemo`s derived from that fetched data — **if you add
-  another memo that reads them, list them in its dependency array**, or
-  it'll cache the pre-fetch empty result and never update (this exact bug
-  happened once during the runtime-fetch refactor).
+- **Both flows now read from the same file**, `public/data/
+  private_screening_data.json` → fetched into `privateScreeningData` state
+  (`fetchPrivateScreeningData`, `App.jsx`), once either flow is entered
+  (`mode === 'bulkBooking'` or `'privateScreening'`), with a shared loading
+  state + `dataError` + inline "Retry" button. There used to be a separate
+  `bulk_booking_data.json`/`bulkBookingData` — removed; Bulk Booking derives
+  its own format/pricing view from the Private Screening dataset via
+  `bulkFormatsByCinema` (groups each cinema's `audis` by `format`, taking
+  morning/afternoon/evening rates from the first audi in each group — all
+  audis sharing a format at a cinema share the same rate). Bulk Booking's
+  format pills additionally show each audi's capacity as a line (purely
+  informational — no 90% floor, no per-audi selection/booking tied to it,
+  unlike Private Screening below).
+- `CINEMA_NAMES`/`ALL_CITIES` (bulk) and `PS_CINEMA_NAMES`/`PS_ALL_CITIES`
+  (private) are separate `useMemo`s that both call `buildCinemaAndCityLists`
+  on the same `privateScreeningData` with the same `getCityForPSCinema` —
+  **if you add another memo that reads them, list them in its dependency
+  array**, or it'll cache the pre-fetch empty result and never update (this
+  exact bug happened once during the runtime-fetch refactor).
 - City name typos/variants (e.g. "Gurugram" vs "Gurgaon", "Ahemdabad" vs
   "Ahmedabad") are normalized via `CITY_NAME_ALIASES` (`:39`), not by
   editing the JSON files.
+- `public/data/cinema_name_map.json` (flat `{ bulkCinemaName: psCinemaName
+  }`) and a matching `BULK_TO_PS_FORMAT_ALIASES` table were added briefly to
+  bridge the two datasets' different naming, then removed once Bulk Booking
+  was switched to read `privateScreeningData` directly (no more naming to
+  bridge). The JSON file itself is still on disk, unreferenced — fine to
+  delete if you're cleaning up, just not done automatically.
 
 ## The 90%-capacity rule (Private Screening only)
 

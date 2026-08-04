@@ -1131,7 +1131,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (mode !== 'privateScreening' || privateScreeningData) return;
+    if ((mode !== 'privateScreening' && mode !== 'bulkBooking') || privateScreeningData) return;
     fetchPrivateScreeningData();
   }, [mode, privateScreeningData]);
 
@@ -1158,6 +1158,27 @@ export default function App() {
   const { cinemaNames: PS_CINEMA_NAMES, allCities: PS_ALL_CITIES } = useMemo(() => {
     if (!privateScreeningData) return { cinemaNames: [], allCities: [] };
     return buildCinemaAndCityLists(privateScreeningData, (name) => getCityForPSCinema(privateScreeningData, name));
+  }, [privateScreeningData]);
+
+  // Purely informational cross-reference for Bulk Booking's format pills — cinemaName ->
+  // format -> [{ audi, capacity }], sourced from the Private Screening dataset's per-audi
+  // rows since Bulk Booking's own data has no audi-level breakdown.
+  const audiCapacityLookup = useMemo(() => {
+    if (!privateScreeningData) return {};
+    const lookup = {};
+    Object.keys(privateScreeningData).forEach((cinemaName) => {
+      const audis = privateScreeningData[cinemaName]?.audis || [];
+      const byFormat = {};
+      audis.forEach((a) => {
+        if (!byFormat[a.format]) byFormat[a.format] = [];
+        byFormat[a.format].push({ audi: a.audi, capacity: a.capacity });
+      });
+      Object.keys(byFormat).forEach((format) => {
+        byFormat[format].sort((a, b) => a.audi - b.audi);
+      });
+      lookup[cinemaName] = byFormat;
+    });
+    return lookup;
   }, [privateScreeningData]);
 
   const psNcrCities = useMemo(() => NCR_CITIES.filter((c) => PS_ALL_CITIES.includes(c)), [PS_ALL_CITIES]);
@@ -2609,9 +2630,6 @@ export default function App() {
           border-radius: 999px;
           font-size: 13px;
           cursor: pointer;
-          display: flex;
-          gap: 8px;
-          align-items: baseline;
           transition: border-color 0.15s, background 0.15s;
         }
         .pb-pill:hover { border-color: var(--gold); }
@@ -2620,6 +2638,8 @@ export default function App() {
           border-color: var(--red);
           color: #fff;
         }
+        .pb-pill-head { display: flex; gap: 8px; align-items: baseline; }
+        .pb-pill-has-audi { border-radius: 14px; }
         .pb-pill-price {
           font-family: 'IBM Plex Mono', monospace;
           font-size: 11.5px;
@@ -3784,20 +3804,36 @@ export default function App() {
                         </div>
   
                         <div className="pb-pill-row" style={{ marginBottom: 14 }}>
-                          {r.availableFormats.map((f) => (
-                            <div
-                              key={f.format}
-                              className={'pb-pill' + (r.format === f.format ? ' active' : '')}
-                              onClick={() => updateCinemaDetail(r.cinemaName, { format: f.format })}
-                            >
-                              {f.format}
-                              {r.timeSlotId ? (
-                                <span className="pb-pill-price">{formatINR(f[r.timeSlotId])}/ticket</span>
-                              ) : (
-                                <span className="pb-pill-price pb-pill-price-muted"></span>
-                              )}
-                            </div>
-                          ))}
+                          {r.availableFormats.map((f) => {
+                            const audiCapacities = audiCapacityLookup[r.cinemaName]?.[f.format];
+                            const hasAudiCapacities = Array.isArray(audiCapacities) && audiCapacities.length > 0;
+                            return (
+                              <div
+                                key={f.format}
+                                className={
+                                  'pb-pill' +
+                                  (r.format === f.format ? ' active' : '') +
+                                  (hasAudiCapacities ? ' pb-pill-has-audi' : '')
+                                }
+                                onClick={() => updateCinemaDetail(r.cinemaName, { format: f.format })}
+                              >
+                                <div className="pb-pill-head">
+                                  {f.format}
+                                  {r.timeSlotId ? (
+                                    <span className="pb-pill-price">{formatINR(f[r.timeSlotId])}/ticket</span>
+                                  ) : (
+                                    <span className="pb-pill-price pb-pill-price-muted"></span>
+                                  )}
+                                </div>
+                                {hasAudiCapacities &&
+                                  audiCapacities.map((a) => (
+                                    <div key={a.audi} className="pb-audi-capacity">
+                                      Audi {a.audi} — {a.capacity} seats
+                                    </div>
+                                  ))}
+                              </div>
+                            );
+                          })}
                         </div>
 
                         <div className="pb-two-col">

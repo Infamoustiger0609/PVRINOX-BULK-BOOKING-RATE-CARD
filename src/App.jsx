@@ -45,6 +45,25 @@ function normalizeCityName(city) {
   return CITY_NAME_ALIASES[city] || city;
 }
 
+// Bulk Booking and Private Screening name the same physical format differently
+// ('LUXE & INSIGNIA' vs 'GOLD/LUXE/INSIGNIA', etc.) — used by Bulk Booking's
+// audi-capacity lookup to resolve a bulk format string to its PS equivalent.
+const BULK_TO_PS_FORMAT_ALIASES = {
+  '4DX & MX4D': '4DX',
+  'DIRECTORS CUT': "Director's Cut",
+  'Drive In': 'Drive In',
+  'ICE': 'ICE',
+  'IMAX': 'IMAX',
+  'LUXE & INSIGNIA': 'GOLD/LUXE/INSIGNIA',
+  'Mainstream': 'Mainstream',
+  'ONYX': 'ONYX',
+  'P[XL] & BIGPIX': 'PXL',
+  'Playhouse & Kiddles': 'Playhouse',
+  'SCREEN X': 'Screen X',
+  // 'Club', 'LIBRARY HALL', 'LIVING ROOM', 'Sapphire', 'THE LOFT' have no
+  // private-screening equivalent — intentionally omitted, capacity just won't show
+};
+
 function getCityForCinema(name) {
   if (CITY_OVERRIDES[name]) return normalizeCityName(CITY_OVERRIDES[name]);
   if (name.includes('Pitampura')) return normalizeCityName('Delhi');
@@ -1134,6 +1153,22 @@ export default function App() {
     if ((mode !== 'privateScreening' && mode !== 'bulkBooking') || privateScreeningData) return;
     fetchPrivateScreeningData();
   }, [mode, privateScreeningData]);
+
+  // Flat { bulkCinemaName: psCinemaName } cross-reference — the two datasets name the
+  // same physical cinema differently, so Bulk Booking's audi-capacity lookup (below)
+  // needs this to find the matching Private Screening entry. Non-critical: if it fails
+  // to load, capacity info just doesn't show, same as an unmapped cinema.
+  const [privateScreeningCinemaMap, setPrivateScreeningCinemaMap] = useState(null);
+
+  useEffect(() => {
+    if ((mode !== 'privateScreening' && mode !== 'bulkBooking') || privateScreeningCinemaMap) return;
+    fetch('/data/cinema_name_map.json')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) setPrivateScreeningCinemaMap(data);
+      })
+      .catch(() => {});
+  }, [mode, privateScreeningCinemaMap]);
 
   const [psShowCityDropdown, setPSShowCityDropdown] = useState(false);
   const [psSelectedCities, setPSSelectedCities] = useState([]);
@@ -3805,7 +3840,10 @@ export default function App() {
   
                         <div className="pb-pill-row" style={{ marginBottom: 14 }}>
                           {r.availableFormats.map((f) => {
-                            const audiCapacities = audiCapacityLookup[r.cinemaName]?.[f.format];
+                            const psCinemaName = privateScreeningCinemaMap?.[r.cinemaName];
+                            const psFormat = BULK_TO_PS_FORMAT_ALIASES[f.format];
+                            const audiCapacities =
+                              psCinemaName && psFormat ? audiCapacityLookup[psCinemaName]?.[psFormat] : null;
                             const hasAudiCapacities = Array.isArray(audiCapacities) && audiCapacities.length > 0;
                             return (
                               <div

@@ -592,47 +592,47 @@ async function buildPIPdf(piData) {
   doc.setLineWidth(0.2);
   doc.setFontSize(9.5);
   const partyHalfW = contentWidth / 2;
-  const partyRowH = 6;
+  const partyRowH = 5.5;
 
   doc.rect(marginX, y, contentWidth, partyRowH);
   doc.setFont('helvetica', 'bold');
-  doc.text('Party Name:', marginX + 2, y + 4.2);
+  doc.text('Party Name:', marginX + 2, y + 3.9);
   doc.setFont('helvetica', 'normal');
-  doc.text(piData.partyName || '-', marginX + 28, y + 4.2);
+  doc.text(piData.partyName || '-', marginX + 28, y + 3.9);
   y += partyRowH;
 
   const partyAddrLines = doc.splitTextToSize(piData.partyAddress || '-', contentWidth - 30);
-  const partyAddrRowH = Math.max(partyRowH, partyAddrLines.length * 4 + 3);
+  const partyAddrRowH = Math.max(partyRowH, partyAddrLines.length * 3.8 + 2.5);
   doc.rect(marginX, y, contentWidth, partyAddrRowH);
   doc.setFont('helvetica', 'bold');
-  doc.text('Address:', marginX + 2, y + 4.2);
+  doc.text('Address:', marginX + 2, y + 3.9);
   doc.setFont('helvetica', 'normal');
-  doc.text(partyAddrLines, marginX + 28, y + 4.2);
+  doc.text(partyAddrLines, marginX + 28, y + 3.9);
   y += partyAddrRowH;
 
   doc.rect(marginX, y, partyHalfW, partyRowH);
   doc.rect(marginX + partyHalfW, y, partyHalfW, partyRowH);
   doc.setFont('helvetica', 'bold');
-  doc.text('State:', marginX + 2, y + 4.2);
+  doc.text('State:', marginX + 2, y + 3.9);
   doc.setFont('helvetica', 'normal');
-  doc.text(piData.partyState || '-', marginX + 20, y + 4.2);
+  doc.text(piData.partyState || '-', marginX + 20, y + 3.9);
   doc.setFont('helvetica', 'bold');
-  doc.text('State Code:', marginX + partyHalfW + 2, y + 4.2);
+  doc.text('State Code:', marginX + partyHalfW + 2, y + 3.9);
   doc.setFont('helvetica', 'normal');
-  doc.text(piData.partyStateCode || '-', marginX + partyHalfW + 28, y + 4.2);
+  doc.text(piData.partyStateCode || '-', marginX + partyHalfW + 28, y + 3.9);
   y += partyRowH;
 
   doc.rect(marginX, y, partyHalfW, partyRowH);
   doc.rect(marginX + partyHalfW, y, partyHalfW, partyRowH);
   doc.setFont('helvetica', 'bold');
-  doc.text('PAN No:', marginX + 2, y + 4.2);
+  doc.text('PAN No:', marginX + 2, y + 3.9);
   doc.setFont('helvetica', 'normal');
-  doc.text(piData.partyPanNo || '-', marginX + 20, y + 4.2);
+  doc.text(piData.partyPanNo || '-', marginX + 20, y + 3.9);
   doc.setFont('helvetica', 'bold');
-  doc.text('GST No:', marginX + partyHalfW + 2, y + 4.2);
+  doc.text('GST No:', marginX + partyHalfW + 2, y + 3.9);
   doc.setFont('helvetica', 'normal');
-  doc.text(piData.partyGstNo || '-', marginX + partyHalfW + 28, y + 4.2);
-  y += partyRowH + 6;
+  doc.text(piData.partyGstNo || '-', marginX + partyHalfW + 28, y + 3.9);
+  y += partyRowH + 4;
 
   // Non-numbered lines above the table — skipped entirely when blank.
   doc.setFontSize(9.5);
@@ -641,16 +641,16 @@ async function buildPIPdf(piData) {
     doc.text('Movie/Event:', marginX, y);
     doc.setFont('helvetica', 'normal');
     doc.text(piData.movieOrEventName, marginX + 28, y);
-    y += 5;
+    y += 4.5;
   }
   if (piData.showDate) {
     doc.setFont('helvetica', 'bold');
     doc.text('Show Date:', marginX, y);
     doc.setFont('helvetica', 'normal');
     doc.text(piData.showDate, marginX + 28, y);
-    y += 5;
+    y += 4.5;
   }
-  y += 2;
+  y += 1.5;
 
   // Line items table — Qty/Rate/GST math stays internal (already folded into each row's
   // resolved `amount` by getResolvedPiData before this is called); the printed table is
@@ -671,7 +671,7 @@ async function buildPIPdf(piData) {
   }
 
   function drawTableHeaderRow() {
-    const h = 7;
+    const h = 6.5;
     doc.setFillColor(232, 232, 232);
     doc.rect(marginX, y, contentWidth, h, 'F');
     doc.setDrawColor(120, 120, 120);
@@ -680,9 +680,9 @@ async function buildPIPdf(piData) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     doc.setTextColor(20, 20, 20);
-    doc.text('#', colX.sno + 3, y + 4.8);
-    doc.text('Description', colX.desc, y + 4.8);
-    doc.text('Amount', colX.amount, y + 4.8, { align: 'right' });
+    doc.text('#', colX.sno + 3, y + 4.4);
+    doc.text('Description', colX.desc, y + 4.4);
+    doc.text('Amount', colX.amount, y + 4.4, { align: 'right' });
     y += h;
   }
 
@@ -691,7 +691,7 @@ async function buildPIPdf(piData) {
   doc.setFontSize(8.5);
   piData.lineItems.forEach((item, idx) => {
     const descLines = doc.splitTextToSize(item.description || '', descWidth);
-    const rowH = Math.max(6.5, descLines.length * 4 + 2.5);
+    const rowH = Math.max(6, descLines.length * 3.8 + 2);
     if (y + rowH > pageHeight - 20) {
       doc.addPage();
       y = 20;
@@ -700,12 +700,12 @@ async function buildPIPdf(piData) {
     doc.setDrawColor(190, 190, 190);
     doc.rect(marginX, y, contentWidth, rowH);
     drawColumnDividers(y, rowH);
-    doc.text(String(idx + 1), colX.sno + 3, y + 4.5);
-    doc.text(descLines, colX.desc, y + 4.5);
-    doc.text(formatINRForPdf(item.amount), colX.amount, y + 4.5, { align: 'right' });
+    doc.text(String(idx + 1), colX.sno + 3, y + 4.2);
+    doc.text(descLines, colX.desc, y + 4.2);
+    doc.text(formatINRForPdf(item.amount), colX.amount, y + 4.2, { align: 'right' });
     y += rowH;
   });
-  y += 4;
+  y += 3;
 
   // Plain (non-boxed) line, not a table row — skipped entirely when blank.
   if (piData.fnbInclusionsNote) {
@@ -717,25 +717,21 @@ async function buildPIPdf(piData) {
     doc.setFontSize(8.5);
     const fnbLines = doc.splitTextToSize(piData.fnbInclusionsNote, contentWidth);
     doc.text(fnbLines, marginX, y);
-    y += fnbLines.length * 3.8 + 3;
+    y += fnbLines.length * 3.6 + 2;
   }
-  y += 3;
-
-  if (y > pageHeight - 55) {
-    doc.addPage();
-    y = 20;
-  }
+  y += 2;
 
   // Fixed, yellow-highlighted, bordered note block right above Total — note1 has its
   // GST-rate percentages already interpolated by the caller (see piNote1 in App()),
-  // never hardcoded here. Height is computed up front so the box is never split
-  // across a page break.
+  // never hardcoded here. Height is computed up front (real content, not a flat
+  // magic number) so the box is never split across a page break, and the one check
+  // below it is the only page-break decision this section needs.
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   const noteLineGroups = [piData.note1, piData.note2, piData.note3]
     .filter(Boolean)
     .map((note) => doc.splitTextToSize(note, contentWidth - 6));
-  const noteBoxHeight = noteLineGroups.reduce((sum, lines) => sum + lines.length * 3.8 + 1, 0) + 4;
+  const noteBoxHeight = noteLineGroups.reduce((sum, lines) => sum + lines.length * 3.6 + 0.8, 0) + 3;
 
   if (noteLineGroups.length) {
     if (y + noteBoxHeight > pageHeight - 20) {
@@ -748,48 +744,48 @@ async function buildPIPdf(piData) {
     doc.rect(marginX, y, contentWidth, noteBoxHeight, 'FD');
     doc.setLineWidth(0.2);
     doc.setTextColor(90, 70, 0);
-    let noteY = y + 4.2;
+    let noteY = y + 3.8;
     noteLineGroups.forEach((lines) => {
       doc.text(lines, marginX + 3, noteY);
-      noteY += lines.length * 3.8 + 1;
+      noteY += lines.length * 3.6 + 0.8;
     });
     doc.setTextColor(20, 20, 20);
-    y += noteBoxHeight + 4;
+    y += noteBoxHeight + 3;
   }
 
   if (y > pageHeight - 20) {
     doc.addPage();
     y = 20;
   }
-  const totalRowH = 9;
+  const totalRowH = 8;
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.3);
   doc.rect(marginX, y, contentWidth, totalRowH);
   doc.setLineWidth(0.2);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
-  doc.text('Total', marginX + 3, y + 6);
-  doc.text(formatINRForPdf(piData.total), rightX - 3, y + 6, { align: 'right' });
-  y += totalRowH + 8;
+  doc.text('Total', marginX + 3, y + 5.5);
+  doc.text(formatINRForPdf(piData.total), rightX - 3, y + 5.5, { align: 'right' });
+  y += totalRowH + 5;
 
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(9);
   const wordsLines = doc.splitTextToSize(`Amount in Words: ${piData.amountInWords}`, contentWidth);
   doc.text(wordsLines, marginX, y);
-  y += wordsLines.length * 4.2 + 4;
+  y += wordsLines.length * 3.8 + 3;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.text('Payment Terms:', marginX, y);
   doc.setFont('helvetica', 'normal');
   doc.text(piData.paymentTerms || '-', marginX + 32, y);
-  y += 9;
+  y += 6.5;
 
   // Yellow-highlighted disclaimer, matching the sample.
   const disclaimerText =
     'NOTE: THIS IS A PROFORMA INVOICE ONLY. THIS IS NOT A TAX INVOICE / BILL OF SUPPLY AND CANNOT BE USED FOR AVAILING INPUT TAX CREDIT.';
   const disclaimerLines = doc.splitTextToSize(disclaimerText, contentWidth - 6);
-  const disclaimerHeight = disclaimerLines.length * 4.2 + 4;
+  const disclaimerHeight = disclaimerLines.length * 3.8 + 3;
   if (y + disclaimerHeight > pageHeight - 20) {
     doc.addPage();
     y = 20;
@@ -799,11 +795,14 @@ async function buildPIPdf(piData) {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(90, 70, 0);
-  doc.text(disclaimerLines, marginX + 3, y + 5);
+  doc.text(disclaimerLines, marginX + 3, y + 4.5);
   doc.setTextColor(20, 20, 20);
-  y += disclaimerHeight + 8;
+  y += disclaimerHeight + 5;
 
-  if (y > pageHeight - 55) {
+  // Only reserve room for the heading + one line here — each note's own per-line check
+  // below (which knows its real wrapped height) handles the rest, so a short notes list
+  // never pays for space sized as if it were long.
+  if (y + 5 + 4 > pageHeight - 5) {
     doc.addPage();
     y = 20;
   }
@@ -811,27 +810,27 @@ async function buildPIPdf(piData) {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.text('Notes:', marginX, y);
-  y += 5;
+  y += 4;
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
+  doc.setFontSize(7.5);
   String(piData.notes || '')
     .split('\n')
     .filter((line) => line.trim())
     .forEach((line) => {
       const lines = doc.splitTextToSize(line.trim(), contentWidth);
-      if (y + lines.length * 3.8 > pageHeight - 20) {
+      if (y + lines.length * 3.5 > pageHeight - 20) {
         doc.addPage();
         y = 20;
       }
       doc.text(lines, marginX, y);
-      y += lines.length * 3.8 + 1;
+      y += lines.length * 3.5 + 0.6;
     });
-  y += 5;
+  y += 4;
 
-  // Bank Details is only ever a heading + 4 short lines (~24mm) — reserve exactly that
-  // (plus a small buffer), not a flat number sized for something bigger, so it doesn't
-  // jump to a new page while there's still plenty of room on the current one.
-  const bankDetailsHeight = 5 + 4 * 4.3 + 3;
+  // Bank Details is only ever a heading + 4 short lines — reserve exactly that (plus a
+  // small buffer), not a flat number sized for something bigger, so it doesn't jump to
+  // a new page while there's still plenty of room on the current one.
+  const bankDetailsHeight = 4 + 4 * 4 + 2;
   if (y + bankDetailsHeight > pageHeight - 5) {
     doc.addPage();
     y = 20;
@@ -840,9 +839,9 @@ async function buildPIPdf(piData) {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.text('Bank Details', marginX, y);
-  y += 5;
+  y += 4;
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
+  doc.setFontSize(8);
   const bd = piData.bankDetails || {};
   [
     ['Account No', bd.accountNo],
@@ -851,7 +850,7 @@ async function buildPIPdf(piData) {
     ['RTGS/NEFT/IFSC', bd.ifsc],
   ].forEach(([label, value]) => {
     doc.text(`${label}: ${value || '-'}`, marginX, y);
-    y += 4.3;
+    y += 4;
   });
 
   // Signature block, bottom-right of the last page — fixed position rather than flowing
@@ -859,26 +858,33 @@ async function buildPIPdf(piData) {
   // here (instead of down by the footer itself) so its real wrapped height — not a flat
   // magic number — feeds the "does this genuinely still fit" check below; the footer
   // draw call further down reuses this same value.
-  const stampSize = 26;
+  const stampSize = 22;
+  doc.setFontSize(6);
   const footerLines = doc.splitTextToSize(PI_DEFAULTS.footerText, contentWidth);
   const signatureBlockHeight =
-    4 /* "For <company>" label above the stamp */ +
+    3 /* "For <company>" label above the stamp */ +
     stampSize +
-    5 /* gap to "Authorised Signatory" */ +
-    4 /* "Authorised Signatory" line */ +
-    4 /* gap to footer */ +
-    footerLines.length * 3 +
-    3; /* bottom margin */
-  let sigY = pageHeight - 45;
-  if (y + signatureBlockHeight > pageHeight) {
+    4 /* gap to "Authorised Signatory" */ +
+    3 /* "Authorised Signatory" line */ +
+    3 /* gap to footer */ +
+    footerLines.length * 2.6 +
+    2; /* bottom margin */
+  // Bottom-anchored when it fits on the page Bank Details already ended on (the
+  // usual case) — but never above the content that's already flowed. If it
+  // genuinely doesn't fit, it moves to a new page and flows right at the top
+  // margin instead of jumping to the same fixed bottom position, which would
+  // otherwise strand it alone near the bottom of an empty page.
+  let sigY = Math.max(y + 3, pageHeight - 40);
+  if (sigY + signatureBlockHeight - 3 > pageHeight) {
     doc.addPage();
-    sigY = pageHeight - 45;
+    y = 20;
+    sigY = y + 3;
   }
   const sigX = rightX - stampSize;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
+  doc.setFontSize(9);
   doc.setTextColor(20, 20, 20);
-  doc.text(`For ${piData.companyName}`, rightX, sigY - 4, { align: 'right' });
+  doc.text(`For ${piData.companyName}`, rightX, sigY - 3, { align: 'right' });
   try {
     const stampDataUrl = await loadImageAsDataUrl(PI_STAMP_IMAGE_URL);
     doc.addImage(stampDataUrl, 'PNG', sigX, sigY, stampSize, stampSize);
@@ -886,14 +892,14 @@ async function buildPIPdf(piData) {
     console.error('Could not embed PI stamp image:', err);
   }
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.text('Authorised Signatory', rightX, sigY + stampSize + 5, { align: 'right' });
+  doc.setFontSize(8.5);
+  doc.text('Authorised Signatory', rightX, sigY + stampSize + 4, { align: 'right' });
 
   // Static footer, bottom of the last page only — never editable per-PI (see PI_DEFAULTS.footerText).
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.5);
+  doc.setFontSize(6);
   doc.setTextColor(120, 120, 120);
-  doc.text(footerLines, pageWidth / 2, pageHeight - 3 - (footerLines.length - 1) * 3, { align: 'center' });
+  doc.text(footerLines, pageWidth / 2, pageHeight - 2 - (footerLines.length - 1) * 2.6, { align: 'center' });
 
   // Full outer border around the content area, on every page — drawn last since page count
   // isn't known until everything above has flowed (and possibly paginated).

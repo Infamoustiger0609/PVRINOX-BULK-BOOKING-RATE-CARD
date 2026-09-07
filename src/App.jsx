@@ -511,7 +511,11 @@ async function buildPIPdf(piData) {
   const marginX = 15;
   const rightX = pageWidth - marginX;
   const contentWidth = rightX - marginX;
-  let y = 14;
+  // 20, not 14 — the outer border's top edge sits at headerBoxTop (10); a 16pt bold
+  // title's ascender reaches ~4.5mm above its own baseline, so a baseline at 14 put the
+  // glyph tops right at (and visually colliding with) the border line. This leaves a
+  // clear ~5mm gap between the border and the tallest part of the title.
+  let y = 20;
 
   let logoDataUrl = null;
   try {
@@ -824,7 +828,11 @@ async function buildPIPdf(piData) {
     });
   y += 5;
 
-  if (y > pageHeight - 45) {
+  // Bank Details is only ever a heading + 4 short lines (~24mm) — reserve exactly that
+  // (plus a small buffer), not a flat number sized for something bigger, so it doesn't
+  // jump to a new page while there's still plenty of room on the current one.
+  const bankDetailsHeight = 5 + 4 * 4.3 + 3;
+  if (y + bankDetailsHeight > pageHeight - 5) {
     doc.addPage();
     y = 20;
   }
@@ -846,11 +854,23 @@ async function buildPIPdf(piData) {
     y += 4.3;
   });
 
-  // Signature block, bottom-right of the last page — fixed position rather than
-  // flowing with the content above, matching the sample's placement.
+  // Signature block, bottom-right of the last page — fixed position rather than flowing
+  // with the content above, matching the sample's placement. footerLines is computed
+  // here (instead of down by the footer itself) so its real wrapped height — not a flat
+  // magic number — feeds the "does this genuinely still fit" check below; the footer
+  // draw call further down reuses this same value.
   const stampSize = 26;
+  const footerLines = doc.splitTextToSize(PI_DEFAULTS.footerText, contentWidth);
+  const signatureBlockHeight =
+    4 /* "For <company>" label above the stamp */ +
+    stampSize +
+    5 /* gap to "Authorised Signatory" */ +
+    4 /* "Authorised Signatory" line */ +
+    4 /* gap to footer */ +
+    footerLines.length * 3 +
+    3; /* bottom margin */
   let sigY = pageHeight - 45;
-  if (y > sigY - 6) {
+  if (y + signatureBlockHeight > pageHeight) {
     doc.addPage();
     sigY = pageHeight - 45;
   }
@@ -873,7 +893,6 @@ async function buildPIPdf(piData) {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.5);
   doc.setTextColor(120, 120, 120);
-  const footerLines = doc.splitTextToSize(PI_DEFAULTS.footerText, contentWidth);
   doc.text(footerLines, pageWidth / 2, pageHeight - 3 - (footerLines.length - 1) * 3, { align: 'center' });
 
   // Full outer border around the content area, on every page — drawn last since page count

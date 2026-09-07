@@ -328,31 +328,37 @@ const PI_STAMP_IMAGE_URL = '/assests/Stamp_for_PI.png.png';
 
 const PI_DEFAULTS = {
   companyName: 'PVR INOX LIMITED',
-  companyAddress: 'Block A, 4th Floor, Building No. 9A, DLF Cyber City, Phase III, Gurugram, Haryana - 122002',
-  gstNo: '27AAACP4526D1ZQ',
+  companyAddress:
+    'PVR INOX LIMITED (formerly known as PVR LIMITED)\nAmbience Mall, 3rd Floor, MH 8 Near Toll Plaza, Gurgaon, Haryana-122002',
+  gstNo: '06AAACP4526D1ZU',
   panNo: 'AAACP4526D',
-  cinNo: 'L74899DL1995PLC067827',
-  gstNumberForInvoice: '27AAACE7796G1Z9',
+  cinNo: 'L74899DL1995PLC067827', // not printed in buildPIPdf, kept in case other code reads it
+  ticketGstRate: 18,
+  foodGstRate: 5,
   paymentTerms: '100% Advance',
   notes: [
-    'Please Issue only A/c Payee Cheque/DD in the favour of PVR INOX LIMITED. Please quote Invoice No. while payment is made.',
-    'In case of payment done thru NEFT/RTGS, please notify with detail at shailesh.dubey@pvrcinemas.com.',
-    'Amount mentioned above is an estimate only and is subject to change on the finalisation of the actual cost.',
+    '100% advance through NEFT/RTGS',
+    'Please notify with detail at rajni.choudhary@pvrcinemas.com',
     'Any Discrepancy in this bill should be notified within 5 days of receipt, else acceptance shall be deemed.',
-    'In case of cheque is bounced Rs.500/- will be charged.',
-    'Interest @2% Per Month shall be charged after payment due date.',
+    // TODO: replace with the exact interest/20%/GST clause from PERFORMA_INVOICE.xlsx — that
+    // file wasn't accessible in this session, so this line is a placeholder, not verbatim text.
+    '[TODO: paste the exact interest/20%/GST clause from the sample here]',
+    'For any query regarding this bill please mail at rajni.choudhary@pvrcinemas.com',
     'All Disputes subject to Delhi Jurisdiction only.',
-    'For any query regarding this bill please mail at salesaccounts@pvrcinemas.com',
   ]
     .map((line, idx) => `${idx + 1}. ${line}`)
     .join('\n'),
   bankDetails: {
-    accountNo: '09290330000102',
-    bankName: 'HDFC Bank Ltd.',
-    branch: 'DLF Cyber City Gurugram',
-    ifsc: 'HDFC0000929',
-    micrCode: '110240120',
+    accountNo: '30330004897',
+    bankName: 'HDFC BANK',
+    branch: '209 - 214, KAILASH BUILDING, 26, KASTURBA GANDHI MARG, NEW DELHI-110001, DELHI',
+    ifsc: 'HDFC0000003',
   },
+  // Static footer, not part of piData — never edited per-PI, always the same on every printout.
+  footerText:
+    'Corporate Office : PVR LIMITED, Block A, 4th Floor, Building No.9, DLF Cyber City Phase-III, Gurgaon -122 002 ' +
+    'Tel: 0124-4708100, Registered Office : 7th Floor, Lotus Grandeur Building, Veera Desai Road, Opposite Gundecha ' +
+    'Symphony, Andheri (W), Mumbai 400053 (CIN No. : L74899MH1995PLC387971)',
 };
 
 // "July 2, 2026" — no leading zero on the day, matches the sample's date format.
@@ -408,41 +414,50 @@ function numberToIndianWords(amount) {
   return 'Rupees ' + parts.join(' ') + ' Only';
 }
 
-// Starting line items for the PI editor — one ticket row per cinema, plus a separate
-// food row when a paid combo was selected. Mirrors the pricing split documented in
-// CLAUDE.md (bulk food count = ticket count; PS food count = desired attendees, not
-// required tickets) using FOOD_COMBOS to recover a per-unit food price, since the
-// lead record itself only stores the combined line subtotal. This is a best-effort
-// starting point — every row is fully editable afterward.
+// A line item's printed `amount` is ticketAmount/foodAmount marked up by their own GST
+// rates and rounded — unless amountOverride is set (non-null), in which case that frozen
+// value wins outright, same override-until-reset idiom as netValue/gstAmount/total/
+// amountInWords below. Amount is never stored as its own mutable field for this reason —
+// always resolve it through here so a GST-rate-field edit live-updates every non-frozen row.
+function resolvePiRowAmount(item, ticketGstRate, foodGstRate) {
+  if (item.amountOverride !== null && item.amountOverride !== undefined) {
+    return Number(item.amountOverride) || 0;
+  }
+  const ticketAmount = Number(item.ticketAmount) || 0;
+  const foodAmount = Number(item.foodAmount) || 0;
+  const tRate = Number(ticketGstRate) || 0;
+  const fRate = Number(foodGstRate) || 0;
+  return Math.round(ticketAmount * (1 + tRate / 100) + foodAmount * (1 + fRate / 100));
+}
+
+// Starting line items for the PI editor — one row per cinema (not one per ticket/food
+// charge), carrying pre-tax ticketAmount/foodAmount separately since they're taxed at
+// different rates (ticketGstRate/foodGstRate on piData). Mirrors the pricing split
+// documented in CLAUDE.md (bulk food count = ticket count; PS food count = desired
+// attendees, not required tickets) using FOOD_COMBOS to recover a per-unit food price,
+// since the lead record itself only stores the combined line subtotal. This is a
+// best-effort starting point — every row is fully editable afterward.
 function buildPiLineItemsFromLead(lead) {
-  let nextId = 0;
-  const items = [];
-  (lead.cinemas || []).forEach((c) => {
+  const items = (lead.cinemas || []).map((c, idx) => {
     const isPS = c.bookingType === 'Private Screening';
     const ticketQty = Number(isPS ? c.requiredTickets : c.ticketCount) || 0;
     const multiplier = Number(c.priceAdjustmentMultiplier) || 1;
     const ticketRate = Math.round((Number(c.pricePerTicket) || 0) * multiplier);
-    items.push({
-      id: nextId++,
-      description: `${c.cinema} - Tickets (${isPS ? `Audi ${c.audiNumber}` : c.format})`,
-      quantity: ticketQty,
-      rate: ticketRate,
-      amount: ticketQty * ticketRate,
-    });
+    const ticketAmount = ticketQty * ticketRate;
 
     const combo = FOOD_COMBOS.find((f) => f.label === c.foodCombo);
-    if (combo && combo.price > 0) {
-      const foodQty = Number(isPS ? c.desiredAttendees : c.ticketCount) || 0;
-      items.push({
-        id: nextId++,
-        description: `${c.cinema} - Food (${combo.label})`,
-        quantity: foodQty,
-        rate: combo.price,
-        amount: foodQty * combo.price,
-      });
-    }
+    const foodQty = Number(isPS ? c.desiredAttendees : c.ticketCount) || 0;
+    const foodAmount = combo && combo.price > 0 ? foodQty * combo.price : 0;
+
+    return {
+      id: idx,
+      description: `${c.cinema} — ${isPS ? `Audi ${c.audiNumber}` : c.format}`,
+      ticketAmount,
+      foodAmount,
+      amountOverride: null,
+    };
   });
-  return items.length ? items : [{ id: 0, description: '', quantity: 1, rate: 0, amount: 0 }];
+  return items.length ? items : [{ id: 0, description: '', ticketAmount: 0, foodAmount: 0, amountOverride: null }];
 }
 
 function buildPiDataFromLead(lead) {
@@ -457,8 +472,18 @@ function buildPiDataFromLead(lead) {
     pinvNo: '',
     partyName: lead.customerName || '',
     partyAddress: '',
+    partyState: '',
+    partyStateCode: '',
+    partyPanNo: '',
+    partyGstNo: '',
+    movieOrEventName: '',
+    showDate: '',
+    fnbInclusionsNote: '',
     lineItems: buildPiLineItemsFromLead(lead),
-    gstNumberForInvoice: PI_DEFAULTS.gstNumberForInvoice,
+    ticketGstRate: PI_DEFAULTS.ticketGstRate,
+    foodGstRate: PI_DEFAULTS.foodGstRate,
+    note2: 'Note : TDS not applicable',
+    note3: 'No GST applicable on sale of Vouchers/E-codes/Gift Card.',
     paymentTerms: PI_DEFAULTS.paymentTerms,
     notes: PI_DEFAULTS.notes,
     bankDetails: { ...PI_DEFAULTS.bankDetails },
@@ -513,7 +538,6 @@ async function buildPIPdf(piData) {
   [
     ['GST No', piData.gstNo],
     ['PAN No', piData.panNo],
-    ['CIN No', piData.cinNo],
   ].forEach(([label, value]) => {
     doc.text(`${label}: ${value}`, rightX, ry, { align: 'right' });
     ry += 4.5;
@@ -552,9 +576,48 @@ async function buildPIPdf(piData) {
   doc.text(partyAddrLines, marginX + 26, y);
   y += partyAddrLines.length * 4.5 + 5;
 
-  // Line items table
-  const colX = { sno: marginX, desc: marginX + 9, qty: marginX + 122, rate: marginX + 140, amount: rightX };
-  const descWidth = colX.qty - colX.desc - 3;
+  doc.setFont('helvetica', 'bold');
+  doc.text('State:', marginX, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(piData.partyState || '-', marginX + 26, y);
+  doc.setFont('helvetica', 'bold');
+  doc.text('State Code:', marginX + 90, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(piData.partyStateCode || '-', marginX + 118, y);
+  y += 5;
+  doc.setFont('helvetica', 'bold');
+  doc.text('PAN No:', marginX, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(piData.partyPanNo || '-', marginX + 26, y);
+  doc.setFont('helvetica', 'bold');
+  doc.text('GST No:', marginX + 90, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(piData.partyGstNo || '-', marginX + 118, y);
+  y += 8;
+
+  // Non-numbered lines above the table — skipped entirely when blank.
+  doc.setFontSize(9.5);
+  if (piData.movieOrEventName) {
+    doc.setFont('helvetica', 'bold');
+    doc.text('Movie/Event:', marginX, y);
+    doc.setFont('helvetica', 'normal');
+    doc.text(piData.movieOrEventName, marginX + 28, y);
+    y += 5;
+  }
+  if (piData.showDate) {
+    doc.setFont('helvetica', 'bold');
+    doc.text('Show Date:', marginX, y);
+    doc.setFont('helvetica', 'normal');
+    doc.text(piData.showDate, marginX + 28, y);
+    y += 5;
+  }
+  y += 2;
+
+  // Line items table — Qty/Rate/GST math stays internal (already folded into each row's
+  // resolved `amount` by getResolvedPiData before this is called); the printed table is
+  // just # | Description | Amount, matching the new sample.
+  const colX = { sno: marginX, desc: marginX + 9, amount: rightX };
+  const descWidth = colX.amount - colX.desc - 30;
 
   function drawTableHeaderRow() {
     const h = 7;
@@ -567,8 +630,6 @@ async function buildPIPdf(piData) {
     doc.setTextColor(20, 20, 20);
     doc.text('#', colX.sno + 2, y + 4.8);
     doc.text('Description', colX.desc, y + 4.8);
-    doc.text('Qty', colX.qty, y + 4.8);
-    doc.text('Rate', colX.rate, y + 4.8);
     doc.text('Amount', colX.amount, y + 4.8, { align: 'right' });
     y += h;
   }
@@ -588,33 +649,54 @@ async function buildPIPdf(piData) {
     doc.rect(marginX, y, contentWidth, rowH);
     doc.text(String(idx + 1), colX.sno + 2, y + 4.5);
     doc.text(descLines, colX.desc, y + 4.5);
-    doc.text(String(item.quantity), colX.qty, y + 4.5);
-    doc.text(formatINRForPdf(item.rate), colX.rate, y + 4.5);
     doc.text(formatINRForPdf(item.amount), colX.amount, y + 4.5, { align: 'right' });
     y += rowH;
   });
-  y += 7;
+  y += 4;
 
-  if (y > pageHeight - 60) {
+  // Plain (non-boxed) line, not a table row — skipped entirely when blank.
+  if (piData.fnbInclusionsNote) {
+    if (y > pageHeight - 30) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(8.5);
+    const fnbLines = doc.splitTextToSize(piData.fnbInclusionsNote, contentWidth);
+    doc.text(fnbLines, marginX, y);
+    y += fnbLines.length * 3.8 + 3;
+  }
+  y += 3;
+
+  if (y > pageHeight - 55) {
     doc.addPage();
     y = 20;
   }
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text('Net Value', colX.rate, y);
-  doc.text(formatINRForPdf(piData.netValue), colX.amount, y, { align: 'right' });
-  y += 5.5;
+  // Fixed note block right above Total — note1 has its GST-rate percentages already
+  // interpolated by the caller (see piNote1 in App()), never hardcoded here.
   doc.setFont('helvetica', 'normal');
-  doc.text(`GST (${piData.gstNumberForInvoice}) @ 18%`, colX.rate - 20, y);
-  doc.text(formatINRForPdf(piData.gstAmount), colX.amount, y, { align: 'right' });
+  doc.setFontSize(8);
+  doc.setTextColor(20, 20, 20);
+  [piData.note1, piData.note2, piData.note3].forEach((note) => {
+    if (!note) return;
+    const lines = doc.splitTextToSize(note, contentWidth);
+    if (y + lines.length * 3.8 > pageHeight - 20) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.text(lines, marginX, y);
+    y += lines.length * 3.8 + 1;
+  });
   y += 4;
-  doc.setDrawColor(120, 120, 120);
-  doc.line(colX.rate - 20, y, rightX, y);
-  y += 5;
+
+  if (y > pageHeight - 20) {
+    doc.addPage();
+    y = 20;
+  }
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.text('Total', colX.rate - 20, y);
+  doc.setFontSize(12);
+  doc.text('Total', marginX, y);
   doc.text(formatINRForPdf(piData.total), colX.amount, y, { align: 'right' });
   y += 8;
 
@@ -691,7 +773,6 @@ async function buildPIPdf(piData) {
     ['Bank Name', bd.bankName],
     ['Branch', bd.branch],
     ['RTGS/NEFT/IFSC', bd.ifsc],
-    ['MICR Code', bd.micrCode],
   ].forEach(([label, value]) => {
     doc.text(`${label}: ${value || '-'}`, marginX, y);
     y += 4.3;
@@ -720,6 +801,13 @@ async function buildPIPdf(piData) {
   doc.setFontSize(9);
   doc.text('Authorised Signatory', rightX, sigY + stampSize + 5, { align: 'right' });
 
+  // Static footer, bottom of the last page only — never editable per-PI (see PI_DEFAULTS.footerText).
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(120, 120, 120);
+  const footerLines = doc.splitTextToSize(PI_DEFAULTS.footerText, contentWidth);
+  doc.text(footerLines, pageWidth / 2, pageHeight - 3 - (footerLines.length - 1) * 3, { align: 'center' });
+
   return doc;
 }
 
@@ -747,6 +835,7 @@ export default function App() {
   const [piGstAmountOverride, setPiGstAmountOverride] = useState(null);
   const [piTotalOverride, setPiTotalOverride] = useState(null);
   const [piAmountInWordsOverride, setPiAmountInWordsOverride] = useState(null);
+  const [piNote1Override, setPiNote1Override] = useState(null);
   const [piSaving, setPiSaving] = useState(false);
   const [piSending, setPiSending] = useState(false);
   const [piGeneratingPdf, setPiGeneratingPdf] = useState(false);
@@ -756,13 +845,26 @@ export default function App() {
   // netValue/gstAmount/total/amountInWords each cascade from the one before unless
   // the employee has typed a manual override into that specific field — matching
   // the PI spec's "editable as an override... until reset to calculated is clicked".
+  // netValue is the pre-tax sum (ticket+food); gstAmount is what tax that pre-tax sum
+  // picked up across the line items (not a flat 18% — ticket and food are taxed at
+  // their own rates, see resolvePiRowAmount) — so it's derived as lineItemsTotal minus
+  // the *resolved* netValue, which is what makes overriding netValue still cascade
+  // into GST/total exactly like it did before this rate split existed.
   const piCalculatedNetValue = useMemo(() => {
     if (!piData) return 0;
-    return piData.lineItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+    return piData.lineItems.reduce((sum, item) => sum + (Number(item.ticketAmount) || 0) + (Number(item.foodAmount) || 0), 0);
   }, [piData]);
   const piNetValue = piNetValueOverride !== null ? Number(piNetValueOverride) || 0 : piCalculatedNetValue;
 
-  const piCalculatedGstAmount = useMemo(() => Math.round(piNetValue * 0.18), [piNetValue]);
+  const piLineItemsTotal = useMemo(() => {
+    if (!piData) return 0;
+    return piData.lineItems.reduce(
+      (sum, item) => sum + resolvePiRowAmount(item, piData.ticketGstRate, piData.foodGstRate),
+      0
+    );
+  }, [piData]);
+
+  const piCalculatedGstAmount = useMemo(() => piLineItemsTotal - piNetValue, [piLineItemsTotal, piNetValue]);
   const piGstAmount = piGstAmountOverride !== null ? Number(piGstAmountOverride) || 0 : piCalculatedGstAmount;
 
   const piCalculatedTotal = useMemo(() => piNetValue + piGstAmount, [piNetValue, piGstAmount]);
@@ -771,21 +873,47 @@ export default function App() {
   const piCalculatedAmountInWords = useMemo(() => numberToIndianWords(piTotal), [piTotal]);
   const piAmountInWords = piAmountInWordsOverride !== null ? piAmountInWordsOverride : piCalculatedAmountInWords;
 
+  // note1's GST percentages must always reflect the live rate fields — same override
+  // idiom as the numeric fields above, so a manual rewrite is possible but a rate-field
+  // edit still auto-updates it for anyone who hasn't typed over it.
+  const piCalculatedNote1 = useMemo(() => {
+    if (!piData) return '';
+    const t = Number(piData.ticketGstRate) || 0;
+    const f = Number(piData.foodGstRate) || 0;
+    return `Note : Total amount mentioned is inclusive of ${t}% GST on Ticket Price & ${f}% GST on FNB combo price.`;
+  }, [piData]);
+  const piNote1 = piNote1Override !== null ? piNote1Override : piCalculatedNote1;
+
   function resetPiEditor() {
     setPiData(null);
     setPiNetValueOverride(null);
     setPiGstAmountOverride(null);
     setPiTotalOverride(null);
     setPiAmountInWordsOverride(null);
+    setPiNote1Override(null);
     setPiError('');
     setPiSent(false);
   }
 
   // Bundles the live form state with the currently-resolved (calculated-or-override)
-  // totals — this is the exact shape saved as a draft, rendered to PDF, and sent.
+  // totals — this is the exact shape saved as a draft, rendered to PDF, and sent. Each
+  // line item's `amount` is resolved here too, so nothing downstream needs to know
+  // about ticketGstRate/foodGstRate/per-row overrides — just a plain printed number.
   function getResolvedPiData() {
     if (!piData) return null;
-    return { ...piData, netValue: piNetValue, gstAmount: piGstAmount, total: piTotal, amountInWords: piAmountInWords };
+    const resolvedLineItems = piData.lineItems.map((item) => ({
+      ...item,
+      amount: resolvePiRowAmount(item, piData.ticketGstRate, piData.foodGstRate),
+    }));
+    return {
+      ...piData,
+      lineItems: resolvedLineItems,
+      netValue: piNetValue,
+      gstAmount: piGstAmount,
+      total: piTotal,
+      amountInWords: piAmountInWords,
+      note1: piNote1,
+    };
   }
 
   // Restores a logged-in employee's session on page load (the JWT cookie
@@ -944,10 +1072,28 @@ export default function App() {
 
     setPiSaving(true);
     try {
-      const netValue = initialPiData.lineItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-      const gstAmount = Math.round(netValue * 0.18);
+      const resolvedLineItems = initialPiData.lineItems.map((item) => ({
+        ...item,
+        amount: resolvePiRowAmount(item, initialPiData.ticketGstRate, initialPiData.foodGstRate),
+      }));
+      const netValue = initialPiData.lineItems.reduce(
+        (sum, item) => sum + (Number(item.ticketAmount) || 0) + (Number(item.foodAmount) || 0),
+        0
+      );
+      const lineItemsTotal = resolvedLineItems.reduce((sum, item) => sum + item.amount, 0);
+      const gstAmount = lineItemsTotal - netValue;
       const total = netValue + gstAmount;
-      const resolved = { ...initialPiData, netValue, gstAmount, total, amountInWords: numberToIndianWords(total) };
+      const t = Number(initialPiData.ticketGstRate) || 0;
+      const f = Number(initialPiData.foodGstRate) || 0;
+      const resolved = {
+        ...initialPiData,
+        lineItems: resolvedLineItems,
+        netValue,
+        gstAmount,
+        total,
+        amountInWords: numberToIndianWords(total),
+        note1: `Note : Total amount mentioned is inclusive of ${t}% GST on Ticket Price & ${f}% GST on FNB combo price.`,
+      };
 
       const res = await fetch(`/api/leads/${lead.id}/pi`, {
         method: 'POST',
@@ -972,28 +1118,23 @@ export default function App() {
     setPiData((d) => ({ ...d, bankDetails: { ...d.bankDetails, [field]: value } }));
   }
 
+  // Plain field setter — `amount` is never stored on the item itself (see
+  // resolvePiRowAmount), so editing ticketAmount/foodAmount here already "recomputes"
+  // it for free on next render; editing amountOverride directly freezes it the same way.
   function updatePiLineItem(id, field, value) {
     setPiData((d) => ({
       ...d,
-      lineItems: d.lineItems.map((item) => {
-        if (item.id !== id) return item;
-        const next = { ...item, [field]: value };
-        // Amount stays editable on its own, but a qty/rate edit always wins and
-        // recomputes it — that's what "keep the editable amount override per row"
-        // means in practice: type over amount for a one-off adjustment, or change
-        // qty/rate to recalculate it.
-        if (field === 'quantity' || field === 'rate') {
-          next.amount = (Number(next.quantity) || 0) * (Number(next.rate) || 0);
-        }
-        return next;
-      }),
+      lineItems: d.lineItems.map((item) => (item.id === id ? { ...item, [field]: value } : item)),
     }));
   }
 
   function addPiLineItem() {
     setPiData((d) => {
       const nextId = d.lineItems.length ? Math.max(...d.lineItems.map((item) => item.id)) + 1 : 0;
-      return { ...d, lineItems: [...d.lineItems, { id: nextId, description: '', quantity: 1, rate: 0, amount: 0 }] };
+      return {
+        ...d,
+        lineItems: [...d.lineItems, { id: nextId, description: '', ticketAmount: 0, foodAmount: 0, amountOverride: null }],
+      };
     });
   }
 
@@ -2265,6 +2406,8 @@ export default function App() {
         }
         .pb-pi-table-row { padding: 6px 0; border-bottom: 1px dotted #d8cdb9; }
         .pb-pi-table-row:last-of-type { border-bottom: none; }
+        .pb-pi-row-amount { display: flex; align-items: center; gap: 4px; }
+        .pb-pi-row-amount input { min-width: 0; }
         .pb-pi-row-remove {
           background: transparent;
           border: none;
@@ -3352,7 +3495,7 @@ export default function App() {
                           onChange={(e) => updatePiField('companyAddress', e.target.value)}
                         />
                       </div>
-                      <div className="pb-pi-grid-3">
+                      <div className="pb-pi-grid-2">
                         <div className="pb-pi-field">
                           <label>GST No</label>
                           <input value={piData.gstNo} onChange={(e) => updatePiField('gstNo', e.target.value)} />
@@ -3360,10 +3503,6 @@ export default function App() {
                         <div className="pb-pi-field">
                           <label>PAN No</label>
                           <input value={piData.panNo} onChange={(e) => updatePiField('panNo', e.target.value)} />
-                        </div>
-                        <div className="pb-pi-field">
-                          <label>CIN No</label>
-                          <input value={piData.cinNo} onChange={(e) => updatePiField('cinNo', e.target.value)} />
                         </div>
                       </div>
                     </div>
@@ -3401,18 +3540,87 @@ export default function App() {
                           placeholder="Billing address"
                         />
                       </div>
+                      <div className="pb-pi-grid-2">
+                        <div className="pb-pi-field">
+                          <label>State</label>
+                          <input value={piData.partyState} onChange={(e) => updatePiField('partyState', e.target.value)} />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>State Code</label>
+                          <input
+                            value={piData.partyStateCode}
+                            onChange={(e) => updatePiField('partyStateCode', e.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div className="pb-pi-grid-2">
+                        <div className="pb-pi-field">
+                          <label>PAN No</label>
+                          <input value={piData.partyPanNo} onChange={(e) => updatePiField('partyPanNo', e.target.value)} />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>GST No</label>
+                          <input value={piData.partyGstNo} onChange={(e) => updatePiField('partyGstNo', e.target.value)} />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pb-pi-section">
+                      <div className="pb-pi-section-title">Screening &amp; FNB</div>
+                      <div className="pb-pi-grid-2">
+                        <div className="pb-pi-field">
+                          <label>Movie / Event Name</label>
+                          <input
+                            value={piData.movieOrEventName}
+                            onChange={(e) => updatePiField('movieOrEventName', e.target.value)}
+                          />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>Show Date</label>
+                          <input value={piData.showDate} onChange={(e) => updatePiField('showDate', e.target.value)} />
+                        </div>
+                      </div>
+                      <div className="pb-pi-field">
+                        <label>FNB Inclusions Note</label>
+                        <input
+                          value={piData.fnbInclusionsNote}
+                          onChange={(e) => updatePiField('fnbInclusionsNote', e.target.value)}
+                          placeholder="e.g. PEPSI+ POPCORN"
+                        />
+                      </div>
                     </div>
 
                     <div className="pb-pi-section">
                       <div className="pb-pi-section-title">Line Items</div>
+                      <div className="pb-pi-grid-2">
+                        <div className="pb-pi-field">
+                          <label>Ticket GST Rate (%)</label>
+                          <input
+                            type="number"
+                            value={piData.ticketGstRate}
+                            onChange={(e) => updatePiField('ticketGstRate', e.target.value)}
+                          />
+                        </div>
+                        <div className="pb-pi-field">
+                          <label>Food GST Rate (%)</label>
+                          <input
+                            type="number"
+                            value={piData.foodGstRate}
+                            onChange={(e) => updatePiField('foodGstRate', e.target.value)}
+                          />
+                        </div>
+                      </div>
                       <div className="pb-pi-table-header">
                         <span>Description</span>
-                        <span>Qty</span>
-                        <span>Rate</span>
+                        <span>Ticket Amt</span>
+                        <span>Food Amt</span>
                         <span>Amount</span>
                         <span />
                       </div>
-                      {piData.lineItems.map((item) => (
+                      {piData.lineItems.map((item) => {
+                        const rowAmount = resolvePiRowAmount(item, piData.ticketGstRate, piData.foodGstRate);
+                        const rowOverridden = item.amountOverride !== null && item.amountOverride !== undefined;
+                        return (
                         <div key={item.id} className="pb-pi-table-row">
                           <input
                             value={item.description}
@@ -3421,19 +3629,30 @@ export default function App() {
                           />
                           <input
                             type="number"
-                            value={item.quantity}
-                            onChange={(e) => updatePiLineItem(item.id, 'quantity', e.target.value)}
+                            value={item.ticketAmount}
+                            onChange={(e) => updatePiLineItem(item.id, 'ticketAmount', e.target.value)}
                           />
                           <input
                             type="number"
-                            value={item.rate}
-                            onChange={(e) => updatePiLineItem(item.id, 'rate', e.target.value)}
+                            value={item.foodAmount}
+                            onChange={(e) => updatePiLineItem(item.id, 'foodAmount', e.target.value)}
                           />
-                          <input
-                            type="number"
-                            value={item.amount}
-                            onChange={(e) => updatePiLineItem(item.id, 'amount', e.target.value)}
-                          />
+                          <div className="pb-pi-row-amount">
+                            <input
+                              type="number"
+                              value={rowAmount}
+                              onChange={(e) => updatePiLineItem(item.id, 'amountOverride', e.target.value)}
+                            />
+                            {rowOverridden && (
+                              <button
+                                type="button"
+                                className="pb-pi-reset-btn"
+                                onClick={() => updatePiLineItem(item.id, 'amountOverride', null)}
+                              >
+                                Reset
+                              </button>
+                            )}
+                          </div>
                           <button
                             type="button"
                             className="pb-pi-row-remove"
@@ -3443,7 +3662,8 @@ export default function App() {
                             &times;
                           </button>
                         </div>
-                      ))}
+                        );
+                      })}
                       <button type="button" className="pb-pi-add-row" onClick={addPiLineItem}>
                         + Add line item
                       </button>
@@ -3464,15 +3684,8 @@ export default function App() {
                           </button>
                         )}
                       </div>
-                      <div className="pb-pi-field">
-                        <label>GST Number (for this invoice)</label>
-                        <input
-                          value={piData.gstNumberForInvoice}
-                          onChange={(e) => updatePiField('gstNumberForInvoice', e.target.value)}
-                        />
-                      </div>
                       <div className="pb-pi-total-row">
-                        <span>GST Amount (18%)</span>
+                        <span>GST Amount</span>
                         <input
                           type="number"
                           value={piGstAmountOverride !== null ? piGstAmountOverride : piGstAmount}
@@ -3483,6 +3696,29 @@ export default function App() {
                             Reset
                           </button>
                         )}
+                      </div>
+                      <div className="pb-pi-field">
+                        <label>Note 1 (GST footnote)</label>
+                        <div className="pb-pi-words-row">
+                          <textarea
+                            rows={2}
+                            value={piNote1Override !== null ? piNote1Override : piNote1}
+                            onChange={(e) => setPiNote1Override(e.target.value)}
+                          />
+                          {piNote1Override !== null && (
+                            <button type="button" className="pb-pi-reset-btn" onClick={() => setPiNote1Override(null)}>
+                              Reset
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="pb-pi-field">
+                        <label>Note 2</label>
+                        <input value={piData.note2} onChange={(e) => updatePiField('note2', e.target.value)} />
+                      </div>
+                      <div className="pb-pi-field">
+                        <label>Note 3</label>
+                        <input value={piData.note3} onChange={(e) => updatePiField('note3', e.target.value)} />
                       </div>
                       <div className="pb-pi-total-row pb-pi-total-row-grand">
                         <span>Total</span>
@@ -3559,13 +3795,6 @@ export default function App() {
                         <div className="pb-pi-field">
                           <label>RTGS/NEFT/IFSC</label>
                           <input value={piData.bankDetails.ifsc} onChange={(e) => updatePiBankField('ifsc', e.target.value)} />
-                        </div>
-                        <div className="pb-pi-field">
-                          <label>MICR Code</label>
-                          <input
-                            value={piData.bankDetails.micrCode}
-                            onChange={(e) => updatePiBankField('micrCode', e.target.value)}
-                          />
                         </div>
                       </div>
                     </div>

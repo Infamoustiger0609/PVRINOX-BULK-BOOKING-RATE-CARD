@@ -55,11 +55,17 @@ alter table employees enable row level security;
 alter table leads enable row level security;
 alter table performa_invoices enable row level security;
 
--- Seed employees — replace/add rows for real staff, then rotate these two.
--- Passwords below match the Phase 1 mock accounts so login behavior is unchanged:
---   yash.verma@pvrinox.com   / pvr@123
---   sachin.daniel@pvrinox.com / pvr@123
+-- Seed employees — replace/add rows for real staff, then rotate these passwords.
+-- Current staff:
+--   ankush.mohanty@pvrinox.com
+--   virender.relhan@pvrinox.com
+--   rajni.choudhary@pvrinox.com
+--   yash.verma@pvrinox.com
+--   sachin.daniel@pvrinox.com
 insert into employees (name, email, password_hash) values
-  ('Yash Verma', 'yash.verma@pvrinox.com', '$2b$10$Bnjrlkjd89myJj/fY/M.O.LVbTFhgip16f2upLa9syALX.Nm9W8Nm'),
-  ('Sachin Daniel', 'sachin.daniel@pvrinox.com', '$2b$10$a.9Frzsh3TQN/01twDT62O7k0fBtR0BuNfOqlF0spVygmV0uFAAVa')
+  ('Ankush Mohanty', 'ankush.mohanty@pvrinox.com', '$2b$10$I5N.D350HBg6lnr68lJp/eWuys8bi8DqCAA.ywTKqxpCtoLfMsdZ.'),
+  ('Virender Relhan', 'virender.relhan@pvrinox.com', '$2b$10$BR4J5XeLuMVr9.6FFMwITOon.62dyCO2CWYc54Ri.rHvDtjmfzIFW'),
+  ('Rajni Choudhary', 'rajni.choudhary@pvrinox.com', '$2b$10$fAoWvGDhqYUts/kJLg5hXezUKob1LsXQoHJeOqa2H7axFN6/UyDGO'),
+  ('Yash Verma', 'yash.verma@pvrinox.com', '$2b$10$QDHGjPjSs1UXKYbL1QILBuoVlVCEryB88unX6N2TtwPaO34QE6URa'),
+  ('Sachin Daniel', 'sachin.daniel@pvrinox.com', '$2b$10$fuJcNerqzKCh9nRyG9i3AuRgZy40Ti/Meqsa3y8O.QBu13Nw4SktC')
 on conflict (email) do nothing;

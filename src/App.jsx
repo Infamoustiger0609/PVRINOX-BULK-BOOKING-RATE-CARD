@@ -340,9 +340,7 @@ const PI_DEFAULTS = {
     '100% advance through NEFT/RTGS',
     'Please notify with detail at rajni.choudhary@pvrcinemas.com',
     'Any Discrepancy in this bill should be notified within 5 days of receipt, else acceptance shall be deemed.',
-    // TODO: replace with the exact interest/20%/GST clause from PERFORMA_INVOICE.xlsx — that
-    // file wasn't accessible in this session, so this line is a placeholder, not verbatim text.
-    '[TODO: paste the exact interest/20%/GST clause from the sample here]',
+    'In the event payment is not received within 7 (seven) days from the due date, an interest of 18% shall be levied on the amount due from the due date till the date of realization. Beyond 7 (seven) days from the due date, you shall be liable to pay twice the amount due with an interest of 20% from the due date till the date of realization. GST as applicable on the interest amount shall also be charged. This shall be in addition to the rights available to PVR under law and equity.',
     'For any query regarding this bill please mail at rajni.choudhary@pvrcinemas.com',
     'All Disputes subject to Delhi Jurisdiction only.',
   ]
@@ -513,13 +511,30 @@ async function buildPIPdf(piData) {
   const marginX = 15;
   const rightX = pageWidth - marginX;
   const contentWidth = rightX - marginX;
-  let y = 16;
+  let y = 14;
+
+  let logoDataUrl = null;
+  try {
+    logoDataUrl = await loadImageAsDataUrl(PVR_INOX_LOGO_URL);
+  } catch (err) {
+    console.error('Could not embed PVR INOX logo:', err);
+  }
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
   doc.setTextColor(20, 20, 20);
   doc.text('PROFORMA INVOICE', pageWidth / 2, y, { align: 'center' });
   y += 8;
+
+  // Logo top-left, above the company name block (source asset is a wide, tightly-cropped
+  // wordmark — 1145x262 — sized down keeping that aspect ratio rather than a fixed box).
+  const logoTopY = y;
+  const logoWidth = 34;
+  const logoHeight = logoWidth * (262 / 1145);
+  if (logoDataUrl) {
+    doc.addImage(logoDataUrl, 'PNG', marginX, logoTopY, logoWidth, logoHeight);
+  }
+  y += logoHeight + 4;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12.5);
@@ -532,7 +547,8 @@ async function buildPIPdf(piData) {
   doc.text(addrLines, marginX, y);
   const addrBottomY = y + addrLines.length * 4.2;
 
-  let ry = 16 + 8;
+  // GST/PAN right-aligned, opposite the logo (same starting y).
+  let ry = logoTopY;
   doc.setFontSize(9);
   doc.setTextColor(20, 20, 20);
   [
@@ -543,9 +559,12 @@ async function buildPIPdf(piData) {
     ry += 4.5;
   });
 
+  const headerBoxTop = 10;
   y = Math.max(addrBottomY, ry) + 5;
-  doc.setDrawColor(180, 180, 180);
-  doc.line(marginX, y, rightX, y);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.3);
+  doc.line(marginX, y, rightX, y); // header's bottom rule — sides/top come from the outer border
+  doc.setLineWidth(0.2);
   y += 7;
 
   doc.setFontSize(9.5);
@@ -563,37 +582,53 @@ async function buildPIPdf(piData) {
   doc.text(piData.pinvNo || '-', rightX, y, { align: 'right' });
   y += 8;
 
-  doc.setFont('helvetica', 'bold');
+  // Party details — bordered box, one row per field group, State/StateCode and PAN/GST
+  // each split into two cells so the shared edges read as an internal grid, not just text.
+  doc.setDrawColor(120, 120, 120);
+  doc.setLineWidth(0.2);
   doc.setFontSize(9.5);
-  doc.text('Party Name:', marginX, y);
-  doc.setFont('helvetica', 'normal');
-  doc.text(piData.partyName || '-', marginX + 26, y);
-  y += 5;
-  doc.setFont('helvetica', 'bold');
-  doc.text('Address:', marginX, y);
-  doc.setFont('helvetica', 'normal');
-  const partyAddrLines = doc.splitTextToSize(piData.partyAddress || '-', contentWidth - 26);
-  doc.text(partyAddrLines, marginX + 26, y);
-  y += partyAddrLines.length * 4.5 + 5;
+  const partyHalfW = contentWidth / 2;
+  const partyRowH = 6;
 
+  doc.rect(marginX, y, contentWidth, partyRowH);
   doc.setFont('helvetica', 'bold');
-  doc.text('State:', marginX, y);
+  doc.text('Party Name:', marginX + 2, y + 4.2);
   doc.setFont('helvetica', 'normal');
-  doc.text(piData.partyState || '-', marginX + 26, y);
+  doc.text(piData.partyName || '-', marginX + 28, y + 4.2);
+  y += partyRowH;
+
+  const partyAddrLines = doc.splitTextToSize(piData.partyAddress || '-', contentWidth - 30);
+  const partyAddrRowH = Math.max(partyRowH, partyAddrLines.length * 4 + 3);
+  doc.rect(marginX, y, contentWidth, partyAddrRowH);
   doc.setFont('helvetica', 'bold');
-  doc.text('State Code:', marginX + 90, y);
+  doc.text('Address:', marginX + 2, y + 4.2);
   doc.setFont('helvetica', 'normal');
-  doc.text(piData.partyStateCode || '-', marginX + 118, y);
-  y += 5;
+  doc.text(partyAddrLines, marginX + 28, y + 4.2);
+  y += partyAddrRowH;
+
+  doc.rect(marginX, y, partyHalfW, partyRowH);
+  doc.rect(marginX + partyHalfW, y, partyHalfW, partyRowH);
   doc.setFont('helvetica', 'bold');
-  doc.text('PAN No:', marginX, y);
+  doc.text('State:', marginX + 2, y + 4.2);
   doc.setFont('helvetica', 'normal');
-  doc.text(piData.partyPanNo || '-', marginX + 26, y);
+  doc.text(piData.partyState || '-', marginX + 20, y + 4.2);
   doc.setFont('helvetica', 'bold');
-  doc.text('GST No:', marginX + 90, y);
+  doc.text('State Code:', marginX + partyHalfW + 2, y + 4.2);
   doc.setFont('helvetica', 'normal');
-  doc.text(piData.partyGstNo || '-', marginX + 118, y);
-  y += 8;
+  doc.text(piData.partyStateCode || '-', marginX + partyHalfW + 28, y + 4.2);
+  y += partyRowH;
+
+  doc.rect(marginX, y, partyHalfW, partyRowH);
+  doc.rect(marginX + partyHalfW, y, partyHalfW, partyRowH);
+  doc.setFont('helvetica', 'bold');
+  doc.text('PAN No:', marginX + 2, y + 4.2);
+  doc.setFont('helvetica', 'normal');
+  doc.text(piData.partyPanNo || '-', marginX + 20, y + 4.2);
+  doc.setFont('helvetica', 'bold');
+  doc.text('GST No:', marginX + partyHalfW + 2, y + 4.2);
+  doc.setFont('helvetica', 'normal');
+  doc.text(piData.partyGstNo || '-', marginX + partyHalfW + 28, y + 4.2);
+  y += partyRowH + 6;
 
   // Non-numbered lines above the table — skipped entirely when blank.
   doc.setFontSize(9.5);
@@ -615,9 +650,21 @@ async function buildPIPdf(piData) {
 
   // Line items table — Qty/Rate/GST math stays internal (already folded into each row's
   // resolved `amount` by getResolvedPiData before this is called); the printed table is
-  // just # | Description | Amount, matching the new sample.
-  const colX = { sno: marginX, desc: marginX + 9, amount: rightX };
-  const descWidth = colX.amount - colX.desc - 30;
+  // just # | Description | Amount, matching the new sample. snoDivider/amountDivider are
+  // the vertical grid lines between those three columns, drawn on every row + the header.
+  const colX = {
+    sno: marginX,
+    snoDivider: marginX + 10,
+    desc: marginX + 13,
+    amountDivider: rightX - 28,
+    amount: rightX,
+  };
+  const descWidth = colX.amountDivider - colX.desc - 2;
+
+  function drawColumnDividers(rowY, rowH) {
+    doc.line(colX.snoDivider, rowY, colX.snoDivider, rowY + rowH);
+    doc.line(colX.amountDivider, rowY, colX.amountDivider, rowY + rowH);
+  }
 
   function drawTableHeaderRow() {
     const h = 7;
@@ -625,10 +672,11 @@ async function buildPIPdf(piData) {
     doc.rect(marginX, y, contentWidth, h, 'F');
     doc.setDrawColor(120, 120, 120);
     doc.rect(marginX, y, contentWidth, h);
+    drawColumnDividers(y, h);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     doc.setTextColor(20, 20, 20);
-    doc.text('#', colX.sno + 2, y + 4.8);
+    doc.text('#', colX.sno + 3, y + 4.8);
     doc.text('Description', colX.desc, y + 4.8);
     doc.text('Amount', colX.amount, y + 4.8, { align: 'right' });
     y += h;
@@ -647,7 +695,8 @@ async function buildPIPdf(piData) {
     }
     doc.setDrawColor(190, 190, 190);
     doc.rect(marginX, y, contentWidth, rowH);
-    doc.text(String(idx + 1), colX.sno + 2, y + 4.5);
+    drawColumnDividers(y, rowH);
+    doc.text(String(idx + 1), colX.sno + 3, y + 4.5);
     doc.text(descLines, colX.desc, y + 4.5);
     doc.text(formatINRForPdf(item.amount), colX.amount, y + 4.5, { align: 'right' });
     y += rowH;
@@ -673,32 +722,51 @@ async function buildPIPdf(piData) {
     y = 20;
   }
 
-  // Fixed note block right above Total — note1 has its GST-rate percentages already
-  // interpolated by the caller (see piNote1 in App()), never hardcoded here.
+  // Fixed, yellow-highlighted, bordered note block right above Total — note1 has its
+  // GST-rate percentages already interpolated by the caller (see piNote1 in App()),
+  // never hardcoded here. Height is computed up front so the box is never split
+  // across a page break.
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.setTextColor(20, 20, 20);
-  [piData.note1, piData.note2, piData.note3].forEach((note) => {
-    if (!note) return;
-    const lines = doc.splitTextToSize(note, contentWidth);
-    if (y + lines.length * 3.8 > pageHeight - 20) {
+  const noteLineGroups = [piData.note1, piData.note2, piData.note3]
+    .filter(Boolean)
+    .map((note) => doc.splitTextToSize(note, contentWidth - 6));
+  const noteBoxHeight = noteLineGroups.reduce((sum, lines) => sum + lines.length * 3.8 + 1, 0) + 4;
+
+  if (noteLineGroups.length) {
+    if (y + noteBoxHeight > pageHeight - 20) {
       doc.addPage();
       y = 20;
     }
-    doc.text(lines, marginX, y);
-    y += lines.length * 3.8 + 1;
-  });
-  y += 4;
+    doc.setFillColor(255, 240, 140);
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
+    doc.rect(marginX, y, contentWidth, noteBoxHeight, 'FD');
+    doc.setLineWidth(0.2);
+    doc.setTextColor(90, 70, 0);
+    let noteY = y + 4.2;
+    noteLineGroups.forEach((lines) => {
+      doc.text(lines, marginX + 3, noteY);
+      noteY += lines.length * 3.8 + 1;
+    });
+    doc.setTextColor(20, 20, 20);
+    y += noteBoxHeight + 4;
+  }
 
   if (y > pageHeight - 20) {
     doc.addPage();
     y = 20;
   }
+  const totalRowH = 9;
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.3);
+  doc.rect(marginX, y, contentWidth, totalRowH);
+  doc.setLineWidth(0.2);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
-  doc.text('Total', marginX, y);
-  doc.text(formatINRForPdf(piData.total), colX.amount, y, { align: 'right' });
-  y += 8;
+  doc.text('Total', marginX + 3, y + 6);
+  doc.text(formatINRForPdf(piData.total), rightX - 3, y + 6, { align: 'right' });
+  y += totalRowH + 8;
 
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(9);
@@ -807,6 +875,16 @@ async function buildPIPdf(piData) {
   doc.setTextColor(120, 120, 120);
   const footerLines = doc.splitTextToSize(PI_DEFAULTS.footerText, contentWidth);
   doc.text(footerLines, pageWidth / 2, pageHeight - 3 - (footerLines.length - 1) * 3, { align: 'center' });
+
+  // Full outer border around the content area, on every page — drawn last since page count
+  // isn't known until everything above has flowed (and possibly paginated).
+  const totalPages = doc.internal.getNumberOfPages();
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.4);
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    doc.rect(marginX - 5, headerBoxTop, contentWidth + 10, pageHeight - headerBoxTop - 8);
+  }
 
   return doc;
 }

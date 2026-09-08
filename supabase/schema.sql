@@ -51,6 +51,31 @@ create table if not exists performa_invoices (
   sent_at timestamptz
 );
 
+-- Ensures performa_invoices.lead_id actually cascades on delete, even on a project
+-- where the table already existed before this FK specified ON DELETE CASCADE (the
+-- `create table if not exists` above is a no-op in that case, so an older
+-- non-cascading constraint could still be silently in effect). Looks up whatever
+-- the existing FK constraint is currently named instead of guessing it, then
+-- recreates it with a stable name and the cascade clause. Safe to re-run.
+do $$
+declare
+  fk_name text;
+begin
+  select conname into fk_name
+  from pg_constraint
+  where conrelid = 'performa_invoices'::regclass
+    and contype = 'f'
+    and conkey = (
+      select array_agg(attnum) from pg_attribute
+      where attrelid = 'performa_invoices'::regclass and attname = 'lead_id'
+    );
+  if fk_name is not null then
+    execute format('alter table performa_invoices drop constraint %I', fk_name);
+  end if;
+  alter table performa_invoices add constraint performa_invoices_lead_id_fkey
+    foreign key (lead_id) references leads(id) on delete cascade;
+end $$;
+
 alter table employees enable row level security;
 alter table leads enable row level security;
 alter table performa_invoices enable row level security;

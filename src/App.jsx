@@ -951,6 +951,8 @@ export default function App() {
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState(false);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
+  const [leadPendingDelete, setLeadPendingDelete] = useState(null); // lead object awaiting confirm, or null
+  const [deletingLead, setDeletingLead] = useState(false);
   const [piData, setPiData] = useState(null); // null until "Create PI" is clicked — see buildPiDataFromLead
   const [piNetValueOverride, setPiNetValueOverride] = useState(null);
   const [piGstAmountOverride, setPiGstAmountOverride] = useState(null);
@@ -1182,19 +1184,34 @@ export default function App() {
     }
   }
 
-  async function handleDeleteLead(lead) {
-    if (!window.confirm(`Delete the query from ${lead.customerName} (${lead.referenceId})? This cannot be undone.`)) {
-      return;
-    }
+  function requestDeleteLead(lead) {
+    setLeadPendingDelete(lead);
+  }
+
+  function cancelDeleteLead() {
+    if (deletingLead) return;
+    setLeadPendingDelete(null);
+  }
+
+  async function confirmDeleteLead() {
+    const lead = leadPendingDelete;
+    if (!lead) return;
+    setDeletingLead(true);
     try {
       const res = await fetch(`/api/leads/${lead.id}`, { method: 'DELETE', credentials: 'include' });
       if (res.status === 401) return handleEmployeeSessionExpired();
-      if (!res.ok) throw new Error('Failed to delete lead');
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || body.error || `Failed to delete lead (${res.status})`);
+      }
       setDashboardLeads((leads) => leads.filter((l) => l.id !== lead.id));
       setSelectedLeadId(null);
+      setLeadPendingDelete(null);
     } catch (err) {
       console.error(err);
-      alert('Could not delete this query. Please try again.');
+      alert(`Could not delete this query: ${err.message}`);
+    } finally {
+      setDeletingLead(false);
     }
   }
 
@@ -3642,7 +3659,7 @@ export default function App() {
                     ))}
                   </select>
                   {loggedInEmployeeEmail.toLowerCase().trim() === 'yash.verma@pvrinox.com' && (
-                    <button type="button" className="pb-btn-danger" onClick={() => handleDeleteLead(selectedLead)}>
+                    <button type="button" className="pb-btn-danger" onClick={() => requestDeleteLead(selectedLead)}>
                       Delete Query
                     </button>
                   )}
@@ -5485,6 +5502,43 @@ export default function App() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {leadPendingDelete && (
+        <div className="pb-modal-backdrop" onMouseDown={cancelDeleteLead}>
+          <div className="pb-modal" style={{ maxWidth: 400 }} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="pb-modal-head">
+              <h2 className="pb-modal-title">Delete this query?</h2>
+              <button type="button" className="pb-modal-close" onClick={cancelDeleteLead} aria-label="Close">
+                &times;
+              </button>
+            </div>
+            <p style={{ fontSize: 13.5, color: 'var(--ink-muted)', margin: '0 0 20px', lineHeight: 1.5 }}>
+              Delete the {leadPendingDelete.bookingType} query from {leadPendingDelete.customerName} (
+              {leadPendingDelete.referenceId})? This cannot be undone.
+            </p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                type="button"
+                className="pb-btn pb-btn-secondary"
+                style={{ flex: 1 }}
+                onClick={cancelDeleteLead}
+                disabled={deletingLead}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="pb-btn-danger"
+                style={{ flex: 1, margin: 0 }}
+                onClick={confirmDeleteLead}
+                disabled={deletingLead}
+              >
+                {deletingLead ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
           </div>
         </div>
       )}

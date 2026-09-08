@@ -20,11 +20,27 @@ export default async function handler(req, res) {
   }
 
   const { id } = req.query;
+
+  // Delete any Proforma Invoice tied to this lead first, explicitly, rather than
+  // relying on the DB-level "on delete cascade" FK — that clause only takes effect
+  // if performa_invoices was created fresh with it; on a project where the table
+  // already existed before the schema added that clause, `create table if not
+  // exists` is a no-op and the old (non-cascading) constraint silently stays in
+  // effect, which is exactly what was causing deletes to fail with a 500 for any
+  // lead that already had a PI drafted — a private screening lead is far more
+  // likely to have one than a bulk booking lead, which is why this looked like a
+  // booking-type bug when it was actually a leftover-child-row bug.
+  const { error: piError } = await supabaseAdmin.from('performa_invoices').delete().eq('lead_id', id);
+  if (piError) {
+    console.error(piError);
+    return res.status(500).json({ error: 'Failed to delete associated proforma invoice', detail: piError.message });
+  }
+
   const { error } = await supabaseAdmin.from('leads').delete().eq('id', id);
 
   if (error) {
     console.error(error);
-    return res.status(500).json({ error: 'Failed to delete lead' });
+    return res.status(500).json({ error: 'Failed to delete lead', detail: error.message });
   }
   return res.status(200).json({ ok: true });
 }

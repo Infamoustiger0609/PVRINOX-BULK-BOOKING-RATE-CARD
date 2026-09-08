@@ -237,7 +237,7 @@ function formatSubmittedOn(value) {
 // Shared by both flows' "Download PDF" button. Takes already-computed display
 // strings/numbers (built separately by each flow from its own live-stub state) and
 // just lays them out — no pricing math happens in here.
-function buildQuotePdf({ bookingType, referenceId, cinemaSections, grandTotal }) {
+async function buildQuotePdf({ bookingType, referenceId, cinemaSections, grandTotal }) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -245,15 +245,31 @@ function buildQuotePdf({ bookingType, referenceId, cinemaSections, grandTotal })
   const valueX = 55;
   let y = 22;
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(22);
-  doc.setTextColor(20, 20, 20);
-  doc.text('PVR', marginX, y);
-  const pvrWidth = doc.getTextWidth('PVR ');
-  doc.setTextColor(190, 145, 40);
-  doc.text('•', marginX + pvrWidth, y);
-  doc.setTextColor(20, 20, 20);
-  doc.text('INOX', marginX + pvrWidth + 6, y);
+  let logoDataUrl = null;
+  try {
+    logoDataUrl = await loadImageAsDataUrl(PVR_INOX_LOGO_URL);
+  } catch (err) {
+    console.error('Could not embed PVR INOX logo:', err);
+  }
+
+  // Real logo image, top-left, in place of the old hand-drawn "PVR • INOX" text —
+  // same asset/aspect-ratio handling as buildPIPdf (1145x262 source, scaled keeping
+  // that ratio). Falls back to the text wordmark if the image fails to load.
+  if (logoDataUrl) {
+    const logoWidth = 40;
+    const logoHeight = logoWidth * (262 / 1145);
+    doc.addImage(logoDataUrl, 'PNG', marginX, y - logoHeight + 2, logoWidth, logoHeight);
+  } else {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(22);
+    doc.setTextColor(20, 20, 20);
+    doc.text('PVR', marginX, y);
+    const pvrWidth = doc.getTextWidth('PVR ');
+    doc.setTextColor(190, 145, 40);
+    doc.text('•', marginX + pvrWidth, y);
+    doc.setTextColor(20, 20, 20);
+    doc.text('INOX', marginX + pvrWidth + 6, y);
+  }
 
   y += 10;
   doc.setFontSize(16);
@@ -316,7 +332,7 @@ function buildQuotePdf({ bookingType, referenceId, cinemaSections, grandTotal })
   doc.setTextColor(120, 120, 120);
   doc.text('This is not a confirmed booking. Our team will contact you to finalize details.', marginX, pageHeight - 15);
 
-  doc.save(`${referenceId}-quote.pdf`);
+  return doc;
 }
 
 /* ---------------------------------------------------------------
@@ -921,8 +937,10 @@ export default function App() {
   // ---- Employee Dashboard: backed by /api/auth/* + /api/leads/* (Supabase + JWT cookie) ----
   const [isEmployeeLoggedIn, setIsEmployeeLoggedIn] = useState(false);
   const [loggedInEmployeeName, setLoggedInEmployeeName] = useState('');
+  const [loggedInEmployeeEmail, setLoggedInEmployeeEmail] = useState('');
   const [employeeLoginEmail, setEmployeeLoginEmail] = useState('');
   const [employeeLoginPassword, setEmployeeLoginPassword] = useState('');
+  const [showEmployeeLoginPassword, setShowEmployeeLoginPassword] = useState(false);
   const [employeeLoginError, setEmployeeLoginError] = useState('');
   const [employeeLoginSubmitting, setEmployeeLoginSubmitting] = useState(false);
 
@@ -1019,23 +1037,16 @@ export default function App() {
     };
   }
 
-  // Restores a logged-in employee's session on page load (the JWT cookie
-  // persists across reloads even though this component's state doesn't).
+  // Forces an employee logout on every page load/refresh, cookie included — a
+  // refresh should never keep someone signed in via a persisted JWT cookie.
   useEffect(() => {
-    fetch('/api/auth/me', { credentials: 'include' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data) {
-          setIsEmployeeLoggedIn(true);
-          setLoggedInEmployeeName(data.name);
-        }
-      })
-      .catch(() => {});
+    fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
   }, []);
 
   function handleEmployeeSessionExpired() {
     setIsEmployeeLoggedIn(false);
     setLoggedInEmployeeName('');
+    setLoggedInEmployeeEmail('');
     setSelectedLeadId(null);
     resetPiEditor();
     setEmployeeLoginError('Your session has expired — please log in again.');
@@ -1059,6 +1070,7 @@ export default function App() {
         if (data) {
           setIsEmployeeLoggedIn(true);
           setLoggedInEmployeeName(data.name);
+          setLoggedInEmployeeEmail(data.email);
         }
       })
       .catch(() => {});
@@ -1082,6 +1094,7 @@ export default function App() {
       }
       setIsEmployeeLoggedIn(true);
       setLoggedInEmployeeName(data.name);
+      setLoggedInEmployeeEmail(data.email);
       setEmployeeLoginEmail('');
       setEmployeeLoginPassword('');
       setMode('dashboard');
@@ -1095,6 +1108,7 @@ export default function App() {
   async function handleEmployeeLogout() {
     setIsEmployeeLoggedIn(false);
     setLoggedInEmployeeName('');
+    setLoggedInEmployeeEmail('');
     setSelectedLeadId(null);
     resetPiEditor();
     setMode(null);
@@ -1165,6 +1179,22 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setDashboardLeads(previousLeads);
+    }
+  }
+
+  async function handleDeleteLead(lead) {
+    if (!window.confirm(`Delete the query from ${lead.customerName} (${lead.referenceId})? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/leads/${lead.id}`, { method: 'DELETE', credentials: 'include' });
+      if (res.status === 401) return handleEmployeeSessionExpired();
+      if (!res.ok) throw new Error('Failed to delete lead');
+      setDashboardLeads((leads) => leads.filter((l) => l.id !== lead.id));
+      setSelectedLeadId(null);
+    } catch (err) {
+      console.error(err);
+      alert('Could not delete this query. Please try again.');
     }
   }
 
@@ -1312,6 +1342,11 @@ export default function App() {
   const [formError, setFormError] = useState('');
   const [confirmedFirstName, setConfirmedFirstName] = useState('');
   const [agreedToTerms, setAgreedToTerms] = useState(false);
+  // Frozen copy of the pre-submission quote (cinemaSections + grandTotal) so the
+  // success screen's "Download Stub" button still has real data once resetFormFields
+  // clears cinemaDetails/selectedCinemaNames.
+  const [submittedCinemaSections, setSubmittedCinemaSections] = useState([]);
+  const [submittedGrandTotal, setSubmittedGrandTotal] = useState(0);
 
   const [showLookupModal, setShowLookupModal] = useState(false);
   const [lookupRef, setLookupRef] = useState('');
@@ -1397,6 +1432,11 @@ export default function App() {
   const [psFormError, setPSFormError] = useState('');
   const [psConfirmedFirstName, setPSConfirmedFirstName] = useState('');
   const [psAgreedToTerms, setPSAgreedToTerms] = useState(false);
+  // Frozen copy of the pre-submission quote (cinemaSections + grandTotal) so the
+  // success screen's "Download Stub" button still has real data once
+  // resetPSFormFields clears psCinemaDetails/psSelectedCinemaNames.
+  const [submittedPSCinemaSections, setSubmittedPSCinemaSections] = useState([]);
+  const [submittedPSGrandTotal, setSubmittedPSGrandTotal] = useState(0);
 
   const { cinemaNames: PS_CINEMA_NAMES, allCities: PS_ALL_CITIES } = useMemo(() => {
     if (!privateScreeningData) return { cinemaNames: [], allCities: [] };
@@ -1508,6 +1548,15 @@ export default function App() {
     const ticketCount = Math.max(0, parseInt(detail.ticketCountInput, 10) || 0);
     const ticketTotal = activePrice ? activePrice * ticketCount : 0;
     const foodTotal = activeCombo ? activeCombo.price * ticketCount : 0;
+    // A flat 50-ticket floor blocks any booking outright in a small audi (e.g. 38
+    // seats). The effective minimum is only ever lowered, never raised, from
+    // MIN_TICKET_COUNT — 90% of the largest audi's capacity for the selected format.
+    const effectiveCapacity =
+      activeFormat && Array.isArray(activeFormat.audis) && activeFormat.audis.length > 0
+        ? Math.max(...activeFormat.audis.map((a) => a.capacity))
+        : null;
+    const effectiveMinTicketCount =
+      effectiveCapacity != null ? Math.min(MIN_TICKET_COUNT, Math.ceil(effectiveCapacity * 0.9)) : MIN_TICKET_COUNT;
     return {
       cinemaName,
       ...detail,
@@ -1520,6 +1569,7 @@ export default function App() {
       priceMultiplier,
       activeCombo,
       ticketCount,
+      effectiveMinTicketCount,
       ticketTotal,
       foodTotal,
       lineTotal: ticketTotal + foodTotal,
@@ -1530,7 +1580,7 @@ export default function App() {
     (r) =>
       r.activeFormat &&
       r.timeSlotId &&
-      r.ticketCount >= MIN_TICKET_COUNT &&
+      r.ticketCount >= r.effectiveMinTicketCount &&
       r.requestDate &&
       !(r.dateAdjustment && r.dateAdjustment.blocked)
   );
@@ -1698,12 +1748,8 @@ export default function App() {
 
   async function handlePSInterested() {
     setPSFormError('');
-    if (!psName.trim() || !psPhone.trim()) {
-      setPSFormError('Please add your name and phone number so our team can reach you.');
-      return;
-    }
-    if (!/^[0-9+\-\s]{7,15}$/.test(psPhone.trim())) {
-      setPSFormError('That phone number looks off — please double check it.');
+    if (!psName.trim() || !/^[0-9]{10}$/.test(psPhone.trim())) {
+      setPSFormError('Please enter your full name and a valid 10-digit mobile number.');
       return;
     }
 
@@ -1719,6 +1765,10 @@ export default function App() {
       console.error(err);
     }
     setPSConfirmedFirstName(psName.trim().split(' ')[0] || '');
+    // Freeze the quote before resetPSFormFields wipes psCinemaDetails/
+    // psSelectedCinemaNames, so the success screen's Download Stub still has real data.
+    setSubmittedPSCinemaSections(buildPSCinemaSections(completePSCinemas));
+    setSubmittedPSGrandTotal(psGrandTotal);
     setPSStatus('interested');
     resetPSFormFields();
   }
@@ -1728,8 +1778,8 @@ export default function App() {
     resetPSFormFields();
   }
 
-  function downloadPSQuotePdf() {
-    const cinemaSections = completePSCinemas.map((r) => ({
+  function buildPSCinemaSections(rows) {
+    return rows.map((r) => ({
       heading: `${r.cinemaName} — ${getCityForPSCinema(privateScreeningData, r.cinemaName)}`,
       rows: [
         ...r.selectedAudis.map((a) => [
@@ -1750,12 +1800,35 @@ export default function App() {
       ],
       subtotal: r.lineTotal,
     }));
-    buildQuotePdf({
-      bookingType: 'Private Screening',
-      referenceId: psReferenceId,
-      cinemaSections,
-      grandTotal: psGrandTotal,
-    });
+  }
+
+  async function downloadPSQuotePdf() {
+    const cinemaSections = buildPSCinemaSections(completePSCinemas);
+    try {
+      const doc = await buildQuotePdf({
+        bookingType: 'Private Screening',
+        referenceId: psReferenceId,
+        cinemaSections,
+        grandTotal: psGrandTotal,
+      });
+      doc.save(`${psReferenceId}-quote.pdf`);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function downloadSubmittedPSQuotePdf() {
+    try {
+      const doc = await buildQuotePdf({
+        bookingType: 'Private Screening',
+        referenceId: psReferenceId,
+        cinemaSections: submittedPSCinemaSections,
+        grandTotal: submittedPSGrandTotal,
+      });
+      doc.save(`${psReferenceId}-quote.pdf`);
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   function handlePSReset() {
@@ -2069,12 +2142,8 @@ export default function App() {
 
   async function handleInterested() {
     setFormError('');
-    if (!name.trim() || !phone.trim()) {
-      setFormError('Please add your name and phone number so our team can reach you.');
-      return;
-    }
-    if (!/^[0-9+\-\s]{7,15}$/.test(phone.trim())) {
-      setFormError('That phone number looks off — please double check it.');
+    if (!name.trim() || !/^[0-9]{10}$/.test(phone.trim())) {
+      setFormError('Please enter your full name and a valid 10-digit mobile number.');
       return;
     }
 
@@ -2091,6 +2160,10 @@ export default function App() {
     }
     // Capture the greeting name before the form fields underneath get wiped.
     setConfirmedFirstName(name.trim().split(' ')[0] || '');
+    // Freeze the quote before resetFormFields wipes cinemaDetails/selectedCinemaNames,
+    // so the success screen's Download Stub still has real data.
+    setSubmittedCinemaSections(buildBulkCinemaSections(completeCinemas));
+    setSubmittedGrandTotal(grandTotal);
     setStatus('interested');
     resetFormFields();
   }
@@ -2100,27 +2173,52 @@ export default function App() {
     resetFormFields();
   }
 
-  function downloadQuotePdf() {
-    const cinemaSections = completeCinemas.map((r) => ({
+  function buildBulkCinemaSections(rows) {
+    return rows.map((r) => ({
       heading: `${r.cinemaName} — ${getCityForPSCinema(privateScreeningData, r.cinemaName)}`,
       rows: [
         ['Format', r.format],
         ['Time slot', `${r.activeTimeSlot.label} (${r.activeTimeSlot.range})`],
         ['Request date', r.requestDate],
         ['Tickets', `${r.ticketCount} × ${formatINRForPdf(r.activePrice)}`],
-        ['Food', r.activeCombo ? r.activeCombo.label : 'None'],
+        ['Food', r.activeCombo && r.activeCombo.id !== 'none'
+          ? `${r.activeCombo.label} (${r.ticketCount} × ${formatINRForPdf(r.activeCombo.price)})`
+          : 'None'],
         ...(r.dateAdjustment && !r.dateAdjustment.blocked && r.dateAdjustment.multiplier
           ? [['Price adjustment', formatSurgeNote(r.dateAdjustment)]]
           : []),
       ],
       subtotal: r.lineTotal,
     }));
-    buildQuotePdf({
-      bookingType: 'Bulk Booking',
-      referenceId,
-      cinemaSections,
-      grandTotal,
-    });
+  }
+
+  async function downloadQuotePdf() {
+    const cinemaSections = buildBulkCinemaSections(completeCinemas);
+    try {
+      const doc = await buildQuotePdf({
+        bookingType: 'Bulk Booking',
+        referenceId,
+        cinemaSections,
+        grandTotal,
+      });
+      doc.save(`${referenceId}-quote.pdf`);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function downloadSubmittedQuotePdf() {
+    try {
+      const doc = await buildQuotePdf({
+        bookingType: 'Bulk Booking',
+        referenceId,
+        cinemaSections: submittedCinemaSections,
+        grandTotal: submittedGrandTotal,
+      });
+      doc.save(`${referenceId}-quote.pdf`);
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   function handleReset() {
@@ -2370,6 +2468,15 @@ export default function App() {
           margin: 0;
           color: var(--ink);
         }
+        .pb-dash-sheet-link {
+          display: inline-block;
+          margin-top: 4px;
+          color: var(--red);
+          font-weight: 600;
+          font-size: 12.5px;
+          text-decoration: none;
+        }
+        .pb-dash-sheet-link:hover { text-decoration: underline; }
         .pb-dash-filters {
           display: flex;
           flex-wrap: wrap;
@@ -2448,6 +2555,18 @@ export default function App() {
           color: var(--ink-muted);
         }
         .pb-dash-detail-status .pb-status-select { width: auto; padding: 6px 12px; }
+        .pb-btn-danger {
+          margin-left: auto;
+          background: transparent;
+          color: var(--red);
+          border: 1px solid var(--red);
+          border-radius: 8px;
+          padding: 7px 14px;
+          font-size: 12.5px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .pb-btn-danger:hover { background: var(--red); color: #fff; }
 
         .pb-dash-detail { max-width: 480px; margin: 0 auto; }
 
@@ -2744,6 +2863,22 @@ export default function App() {
           font-size: 11px;
           pointer-events: none;
         }
+
+        .pb-password-field { position: relative; }
+        .pb-password-field input.pb-input { padding-right: 40px; }
+        .pb-password-toggle {
+          position: absolute;
+          right: 6px;
+          top: 50%;
+          transform: translateY(-50%);
+          background: none;
+          border: none;
+          padding: 6px;
+          display: flex;
+          color: var(--ink-muted);
+          cursor: pointer;
+        }
+        .pb-password-toggle:hover { color: var(--ink); }
 
         .pb-select-trigger {
           display: flex;
@@ -3153,6 +3288,22 @@ export default function App() {
         .pb-result-title { font-family: 'Bebas Neue', sans-serif; font-size: 30px; margin-bottom: 8px; }
         .pb-result-text { font-size: 13.5px; color: #5c534d; max-width: 320px; margin: 0 auto 20px; }
         .pb-result-ref { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--red-dim); margin-bottom: 22px; }
+        .pb-stub-note {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          text-align: left;
+          background: rgba(255, 255, 255, 0.5);
+          border: 1px solid #cbbfa8;
+          border-radius: 10px;
+          padding: 14px 18px;
+          margin: 0 auto 16px;
+          max-width: 320px;
+        }
+        .pb-stub-note-icon { flex-shrink: 0; color: var(--red-dim); }
+        .pb-stub-note-text { display: flex; flex-direction: column; gap: 2px; }
+        .pb-stub-note-main { font-weight: 600; font-size: 13px; color: var(--stub-ink); }
+        .pb-stub-note-sub { font-size: 12px; color: #5c534d; }
         .pb-btn-reset {
           background: var(--stub-ink);
           color: var(--stub);
@@ -3324,16 +3475,37 @@ export default function App() {
               </div>
               <div className="pb-field">
                 <label className="pb-label">Password</label>
-                <input
-                  className="pb-input"
-                  type="password"
-                  value={employeeLoginPassword}
-                  onChange={(e) => setEmployeeLoginPassword(e.target.value)}
-                  placeholder="••••••••"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleEmployeeLogin();
-                  }}
-                />
+                <div className="pb-password-field">
+                  <input
+                    className="pb-input"
+                    type={showEmployeeLoginPassword ? 'text' : 'password'}
+                    value={employeeLoginPassword}
+                    onChange={(e) => setEmployeeLoginPassword(e.target.value)}
+                    placeholder="••••••••"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleEmployeeLogin();
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="pb-password-toggle"
+                    onClick={() => setShowEmployeeLoginPassword((v) => !v)}
+                    aria-label={showEmployeeLoginPassword ? 'Hide password' : 'Show password'}
+                    tabIndex={-1}
+                  >
+                    {showEmployeeLoginPassword ? (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a20.3 20.3 0 0 1 5.06-6.06M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a20.3 20.3 0 0 1-3.22 4.44M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                        <path d="M1 1l22 22" />
+                      </svg>
+                    ) : (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </div>
               {employeeLoginError && (
                 <div className="pb-error" style={{ margin: '0 0 16px' }}>
@@ -3359,6 +3531,14 @@ export default function App() {
               <div>
                 <p className="pb-landing-eyebrow" style={{ margin: '0 0 4px' }}>Staff Dashboard</p>
                 <h1 className="pb-dash-title">Welcome, {loggedInEmployeeName}</h1>
+                <a
+                  className="pb-dash-sheet-link"
+                  href="https://docs.google.com/spreadsheets/d/192qmhMK3KO7Xkgt3Y8g2iaNClsVk7WUXu7AVuhSAHJE/edit?gid=1563139304#gid=1563139304"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Leads Submission Google Sheet
+                </a>
               </div>
               <button type="button" className="pb-lookup-trigger" onClick={handleEmployeeLogout}>
                 Log out
@@ -3461,6 +3641,11 @@ export default function App() {
                       </option>
                     ))}
                   </select>
+                  {loggedInEmployeeEmail === 'yash.verma@pvrinox.com' && (
+                    <button type="button" className="pb-btn-danger" onClick={() => handleDeleteLead(selectedLead)}>
+                      Delete Query
+                    </button>
+                  )}
                 </div>
 
                 <div className="pb-stub">
@@ -4157,7 +4342,7 @@ export default function App() {
                                 type="button"
                                 onClick={() =>
                                   updateCinemaDetail(r.cinemaName, {
-                                    ticketCountInput: String(Math.max(MIN_TICKET_COUNT, r.ticketCount - 1)),
+                                    ticketCountInput: String(Math.max(r.effectiveMinTicketCount, r.ticketCount - 1)),
                                   })
                                 }
                               >
@@ -4166,7 +4351,7 @@ export default function App() {
                               <input
                                 className="pb-input"
                                 type="number"
-                                min={MIN_TICKET_COUNT}
+                                min={r.effectiveMinTicketCount}
                                 value={r.ticketCountInput}
                                 onChange={(e) => {
                                   const v = e.target.value;
@@ -4175,9 +4360,9 @@ export default function App() {
                                 onBlur={() => {
                                   if (
                                     r.ticketCountInput === '' ||
-                                    Math.max(0, parseInt(r.ticketCountInput, 10) || 0) < MIN_TICKET_COUNT
+                                    Math.max(0, parseInt(r.ticketCountInput, 10) || 0) < r.effectiveMinTicketCount
                                   ) {
-                                    updateCinemaDetail(r.cinemaName, { ticketCountInput: String(MIN_TICKET_COUNT) });
+                                    updateCinemaDetail(r.cinemaName, { ticketCountInput: String(r.effectiveMinTicketCount) });
                                   }
                                 }}
                               />
@@ -4188,8 +4373,8 @@ export default function App() {
                                 +
                               </button>
                             </div>
-                            {r.ticketCountInput !== '' && r.ticketCount < MIN_TICKET_COUNT && (
-                              <div className="pb-field-warning">Minimum group size is {MIN_TICKET_COUNT} tickets</div>
+                            {r.ticketCountInput !== '' && r.ticketCount < r.effectiveMinTicketCount && (
+                              <div className="pb-field-warning">Minimum group size is {r.effectiveMinTicketCount} tickets</div>
                             )}
                           </div>
 
@@ -4411,12 +4596,12 @@ export default function App() {
                 {quoteReady && (
                   <>
                     <div className="pb-field" style={{ padding: '0 22px', marginBottom: 14 }}>
-                      <label className="pb-label" style={{ color: '#6b6058' }}>Your name</label>
+                      <label className="pb-label" style={{ color: '#6b6058' }}>Your name<span className="pb-required">*</span></label>
                       <input className="pb-input" style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
                         value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" />
                     </div>
                     <div className="pb-field" style={{ padding: '0 22px', marginBottom: 14 }}>
-                      <label className="pb-label" style={{ color: '#6b6058' }}>Phone number</label>
+                      <label className="pb-label" style={{ color: '#6b6058' }}>Phone number<span className="pb-required">*</span></label>
                       <input className="pb-input" style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
                         value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10-digit mobile number" />
                     </div>
@@ -4467,6 +4652,24 @@ export default function App() {
                     you shortly to confirm details and finalize pricing.
                   </p>
                   <div className="pb-result-ref">Reference: {referenceId}</div>
+                  <div className="pb-stub-note">
+                    <svg className="pb-stub-note-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 3v12" />
+                      <path d="M7 10l5 5 5-5" />
+                      <path d="M5 21h14" />
+                    </svg>
+                    <div className="pb-stub-note-text">
+                      <div className="pb-stub-note-main">Our representative will contact you shortly.</div>
+                      <div className="pb-stub-note-sub">Please download your ticket stub for any further queries.</div>
+                    </div>
+                  </div>
+                  <button
+                    className="pb-btn pb-btn-secondary"
+                    style={{ display: 'block', width: 'fit-content', margin: '0 auto 12px' }}
+                    onClick={downloadSubmittedQuotePdf}
+                  >
+                    Download Stub
+                  </button>
                   <button className="pb-btn-reset" onClick={handleReset}>Start a new quote</button>
                 </div>
               </div>
@@ -5056,12 +5259,12 @@ export default function App() {
                 {psQuoteReady && (
                   <>
                     <div className="pb-field" style={{ padding: '0 22px', marginBottom: 14 }}>
-                      <label className="pb-label" style={{ color: '#6b6058' }}>Your name</label>
+                      <label className="pb-label" style={{ color: '#6b6058' }}>Your name<span className="pb-required">*</span></label>
                       <input className="pb-input" style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
                         value={psName} onChange={(e) => setPSName(e.target.value)} placeholder="Full name" />
                     </div>
                     <div className="pb-field" style={{ padding: '0 22px', marginBottom: 14 }}>
-                      <label className="pb-label" style={{ color: '#6b6058' }}>Phone number</label>
+                      <label className="pb-label" style={{ color: '#6b6058' }}>Phone number<span className="pb-required">*</span></label>
                       <input className="pb-input" style={{ background: '#fff', color: '#1c1717', border: '1px solid #cbbfa8' }}
                         value={psPhone} onChange={(e) => setPSPhone(e.target.value)} placeholder="10-digit mobile number" />
                     </div>
@@ -5112,6 +5315,24 @@ export default function App() {
                     will call you shortly to confirm details and finalize pricing.
                   </p>
                   <div className="pb-result-ref">Reference: {psReferenceId}</div>
+                  <div className="pb-stub-note">
+                    <svg className="pb-stub-note-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 3v12" />
+                      <path d="M7 10l5 5 5-5" />
+                      <path d="M5 21h14" />
+                    </svg>
+                    <div className="pb-stub-note-text">
+                      <div className="pb-stub-note-main">Our representative will contact you shortly.</div>
+                      <div className="pb-stub-note-sub">Please download your ticket stub for any further queries.</div>
+                    </div>
+                  </div>
+                  <button
+                    className="pb-btn pb-btn-secondary"
+                    style={{ display: 'block', width: 'fit-content', margin: '0 auto 12px' }}
+                    onClick={downloadSubmittedPSQuotePdf}
+                  >
+                    Download Stub
+                  </button>
                   <button className="pb-btn-reset" onClick={handlePSReset}>Start a new quote</button>
                 </div>
               </div>

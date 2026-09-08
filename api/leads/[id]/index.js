@@ -15,7 +15,7 @@ export default async function handler(req, res) {
   const session = requireSession(req, res);
   if (!session) return;
 
-  if (session.email !== DELETE_ALLOWED_EMAIL) {
+  if (String(session.email || '').toLowerCase().trim() !== DELETE_ALLOWED_EMAIL) {
     return res.status(403).json({ error: 'Not authorized to delete leads' });
   }
 

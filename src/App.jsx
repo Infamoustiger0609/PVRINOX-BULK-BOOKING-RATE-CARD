@@ -3641,7 +3641,7 @@ export default function App() {
                       </option>
                     ))}
                   </select>
-                  {loggedInEmployeeEmail === 'yash.verma@pvrinox.com' && (
+                  {loggedInEmployeeEmail.toLowerCase().trim() === 'yash.verma@pvrinox.com' && (
                     <button type="button" className="pb-btn-danger" onClick={() => handleDeleteLead(selectedLead)}>
                       Delete Query
                     </button>
